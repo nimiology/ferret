@@ -12,3 +12,4 @@ path = "src/main.rs"
 ferret-core = { path = "../ferret-core" }
 eframe = "0.29"
 anyhow = "1"
+libc = "0.2"

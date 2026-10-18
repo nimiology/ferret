@@ -1310,6 +1310,7 @@ dependencies = [
  "anyhow",
  "eframe",
  "ferret-core",
+ "libc",
 ]
 
 [[package]]
