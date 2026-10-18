@@ -4,6 +4,7 @@ pub const NO_PARENT: u32 = u32::MAX;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[repr(u8)]
+#[serde(rename_all = "lowercase")]
 pub enum Kind {
     File = 0,
     Dir = 1,

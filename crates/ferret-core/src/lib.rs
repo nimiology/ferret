@@ -1,6 +1,7 @@
 //! Ferret core: the index, scanner, query parser, search engine and snapshot.
 
 pub mod index;
+pub mod protocol;
 pub mod query;
 pub mod scan;
 pub mod search;
