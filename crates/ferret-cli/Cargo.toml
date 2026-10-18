@@ -1,0 +1,14 @@
+[package]
+name = "ferret-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "ff"
+path = "src/main.rs"
+
+[dependencies]
+ferret-core = { path = "../ferret-core" }
+clap = { version = "4", features = ["derive"] }
+anyhow = "1"
