@@ -35,7 +35,12 @@ fn start() -> Daemon {
         .stderr(Stdio::null())
         .spawn()
         .unwrap();
-    let d = Daemon { child, sock, root, _dir: dir };
+    let d = Daemon {
+        child,
+        sock,
+        root,
+        _dir: dir,
+    };
     let t = Instant::now();
     loop {
         if UnixStream::connect(&d.sock).is_ok()
@@ -43,7 +48,10 @@ fn start() -> Daemon {
         {
             return d;
         }
-        assert!(t.elapsed() < Duration::from_secs(10), "daemon did not come up");
+        assert!(
+            t.elapsed() < Duration::from_secs(10),
+            "daemon did not come up"
+        );
         std::thread::sleep(Duration::from_millis(50));
     }
 }
@@ -58,7 +66,12 @@ fn rpc(sock: &Path, line: &str) -> serde_json::Value {
 }
 
 fn paths(v: &serde_json::Value) -> Vec<String> {
-    v["hits"].as_array().unwrap().iter().map(|h| h["path"].as_str().unwrap().to_owned()).collect()
+    v["hits"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|h| h["path"].as_str().unwrap().to_owned())
+        .collect()
 }
 
 #[test]
@@ -73,10 +86,16 @@ fn search_status_and_errors() {
     assert!(r.get("error").is_none());
     assert_eq!(r["total"], 2);
 
-    let r = rpc(&d.sock, r#"{"v":1,"id":7,"op":"search","q":"foo","kind":"file"}"#);
+    let r = rpc(
+        &d.sock,
+        r#"{"v":1,"id":7,"op":"search","q":"foo","kind":"file"}"#,
+    );
     assert_eq!(paths(&r), vec![format!("{}/sub/foo.txt", d.root.display())]);
     assert_eq!(r["hits"][0]["size"], 5);
-    let r = rpc(&d.sock, r#"{"v":1,"id":8,"op":"search","q":"foo type:dir","kind":"file"}"#);
+    let r = rpc(
+        &d.sock,
+        r#"{"v":1,"id":8,"op":"search","q":"foo type:dir","kind":"file"}"#,
+    );
     assert_eq!(r["total"], 0);
 
     let r = rpc(&d.sock, r#"{"v":1,"id":9,"op":"search","q":"\"unclosed"}"#);
@@ -91,25 +110,39 @@ fn search_status_and_errors() {
 
     // several requests on one connection
     let mut s = UnixStream::connect(&d.sock).unwrap();
-    s.write_all(b"{\"v\":1,\"id\":1,\"op\":\"status\"}\n{\"v\":1,\"id\":2,\"op\":\"status\"}\n").unwrap();
+    s.write_all(b"{\"v\":1,\"id\":1,\"op\":\"status\"}\n{\"v\":1,\"id\":2,\"op\":\"status\"}\n")
+        .unwrap();
     let mut lines = BufReader::new(s).lines();
     let ids: Vec<u64> = (0..2)
-        .map(|_| serde_json::from_str::<serde_json::Value>(&lines.next().unwrap().unwrap()).unwrap()["id"].as_u64().unwrap())
+        .map(|_| {
+            serde_json::from_str::<serde_json::Value>(&lines.next().unwrap().unwrap()).unwrap()
+                ["id"]
+                .as_u64()
+                .unwrap()
+        })
         .collect();
     assert_eq!(ids, vec![1, 2]);
 
-    let mode = std::fs::metadata(&d.sock).map(|m| std::os::unix::fs::PermissionsExt::mode(&m.permissions())).unwrap();
+    let mode = std::fs::metadata(&d.sock)
+        .map(|m| std::os::unix::fs::PermissionsExt::mode(&m.permissions()))
+        .unwrap();
     assert_eq!(mode & 0o777, 0o600);
 }
 
 fn wait_for(d: &Daemon, q: &str, want: usize) {
     let t = Instant::now();
     loop {
-        let r = rpc(&d.sock, &format!(r#"{{"v":1,"id":1,"op":"search","q":"{q}"}}"#));
+        let r = rpc(
+            &d.sock,
+            &format!(r#"{{"v":1,"id":1,"op":"search","q":"{q}"}}"#),
+        );
         if r["total"] == want {
             return;
         }
-        assert!(t.elapsed() < Duration::from_secs(3), "{q}: wanted {want}, got {r}");
+        assert!(
+            t.elapsed() < Duration::from_secs(3),
+            "{q}: wanted {want}, got {r}"
+        );
         std::thread::sleep(Duration::from_millis(50));
     }
 }

@@ -77,7 +77,8 @@ impl Shell {
             .map_err(|e| eprintln!("ferret: tray icon unavailable: {e}"))
             .ok();
 
-        let (open_id, settings_id, quit_id) = (open.id().clone(), settings.id().clone(), quit.id().clone());
+        let (open_id, settings_id, quit_id) =
+            (open.id().clone(), settings.id().clone(), quit.id().clone());
         let (c, t) = (ctx.clone(), tx.clone());
         MenuEvent::set_event_handler(Some(move |e: MenuEvent| {
             if e.id == quit_id {
@@ -85,7 +86,11 @@ impl Shell {
             }
             if e.id == open_id || e.id == settings_id {
                 show();
-                let _ = t.send(if e.id == settings_id { Cmd::Settings } else { Cmd::Shown });
+                let _ = t.send(if e.id == settings_id {
+                    Cmd::Settings
+                } else {
+                    Cmd::Shown
+                });
                 c.request_repaint();
             }
         }));
@@ -108,12 +113,17 @@ impl Shell {
             status,
             open,
             status_text: String::new(),
-            hotkeys: GlobalHotKeyManager::new().map_err(|e| eprintln!("ferret: hotkeys unavailable: {e}")).ok(),
+            hotkeys: GlobalHotKeyManager::new()
+                .map_err(|e| eprintln!("ferret: hotkeys unavailable: {e}"))
+                .ok(),
             hotkey: None,
             rx,
         };
         if let Err(e) = s.set_hotkey(hotkey) {
-            eprintln!("ferret: hotkey {hotkey}: {e}; using {}", config::DEFAULT_HOTKEY);
+            eprintln!(
+                "ferret: hotkey {hotkey}: {e}; using {}",
+                config::DEFAULT_HOTKEY
+            );
             let _ = s.set_hotkey(config::DEFAULT_HOTKEY);
         }
         s

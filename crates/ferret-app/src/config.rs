@@ -18,7 +18,12 @@ pub struct AppConfig {
 
 impl Default for AppConfig {
     fn default() -> Self {
-        Self { hotkey: DEFAULT_HOTKEY.into(), excluded: Vec::new(), external_drives: false, launch_at_login: false }
+        Self {
+            hotkey: DEFAULT_HOTKEY.into(),
+            excluded: Vec::new(),
+            external_drives: false,
+            launch_at_login: false,
+        }
     }
 }
 
@@ -34,16 +39,31 @@ pub fn config_path() -> PathBuf {
 pub fn read_app(text: &str) -> AppConfig {
     let d = AppConfig::default();
     let table = text.parse::<toml::Table>().unwrap_or_default();
-    let Some(app) = table.get("app").and_then(|v| v.as_table()) else { return d };
+    let Some(app) = table.get("app").and_then(|v| v.as_table()) else {
+        return d;
+    };
     AppConfig {
-        hotkey: app.get("hotkey").and_then(|v| v.as_str()).map_or(d.hotkey, String::from),
+        hotkey: app
+            .get("hotkey")
+            .and_then(|v| v.as_str())
+            .map_or(d.hotkey, String::from),
         excluded: app
             .get("excluded")
             .and_then(|v| v.as_array())
-            .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
+            })
             .unwrap_or_default(),
-        external_drives: app.get("external_drives").and_then(|v| v.as_bool()).unwrap_or(false),
-        launch_at_login: app.get("launch_at_login").and_then(|v| v.as_bool()).unwrap_or(false),
+        external_drives: app
+            .get("external_drives")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
+        launch_at_login: app
+            .get("launch_at_login")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
     }
 }
 
@@ -101,13 +121,20 @@ pub fn format_hotkey(h: &HotKey) -> String {
         }
     }
     let key = h.key.to_string();
-    out.push_str(key.strip_prefix("Key").or_else(|| key.strip_prefix("Digit")).unwrap_or(&key));
+    out.push_str(
+        key.strip_prefix("Key")
+            .or_else(|| key.strip_prefix("Digit"))
+            .unwrap_or(&key),
+    );
     out
 }
 
 /// "Option+Space" -> "⌥Space" for menus and the settings field.
 pub fn hotkey_glyphs(s: &str) -> String {
-    s.replace("Control+", "⌃").replace("Option+", "⌥").replace("Shift+", "⇧").replace("Command+", "⌘")
+    s.replace("Control+", "⌃")
+        .replace("Option+", "⌥")
+        .replace("Shift+", "⇧")
+        .replace("Command+", "⌘")
 }
 
 /// Hotkey string from what egui saw while recording. None for bare keys (no modifier).
@@ -116,7 +143,12 @@ pub fn hotkey_from_egui(m: eframe::egui::Modifiers, key: eframe::egui::Key) -> O
         return None;
     }
     let mut s = String::new();
-    for (on, name) in [(m.ctrl, "Control+"), (m.alt, "Option+"), (m.shift, "Shift+"), (m.mac_cmd, "Command+")] {
+    for (on, name) in [
+        (m.ctrl, "Control+"),
+        (m.alt, "Option+"),
+        (m.shift, "Shift+"),
+        (m.mac_cmd, "Command+"),
+    ] {
         if on {
             s.push_str(name);
         }
@@ -127,7 +159,9 @@ pub fn hotkey_from_egui(m: eframe::egui::Modifiers, key: eframe::egui::Key) -> O
 
 /// True = Full Disk Access is clearly missing. Only PermissionDenied counts; NotFound etc. tell us nothing.
 pub fn fda_missing(probe: &[io::Result<std::fs::ReadDir>]) -> bool {
-    probe.iter().any(|r| matches!(r, Err(e) if e.kind() == io::ErrorKind::PermissionDenied))
+    probe
+        .iter()
+        .any(|r| matches!(r, Err(e) if e.kind() == io::ErrorKind::PermissionDenied))
 }
 
 fn fda_marker() -> PathBuf {
@@ -140,7 +174,10 @@ pub fn should_prompt_fda() -> bool {
         return false;
     }
     let h = home();
-    fda_missing(&[std::fs::read_dir(h.join("Library/Mail")), std::fs::read_dir(h.join("Library/Safari"))])
+    fda_missing(&[
+        std::fs::read_dir(h.join("Library/Mail")),
+        std::fs::read_dir(h.join("Library/Safari")),
+    ])
 }
 
 pub fn dismiss_fda() {
@@ -162,7 +199,11 @@ pub fn set_launch_at_login(on: bool) -> io::Result<()> {
         };
     }
     let exe = std::env::current_exe()?;
-    let exe = exe.to_string_lossy().replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;");
+    let exe = exe
+        .to_string_lossy()
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;");
     let plist = format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -188,11 +229,18 @@ mod tests {
     fn app_table_round_trip_keeps_mcp() {
         let old = "# my notes\n[mcp]\ndeny = [\"~/.ssh\"] # keep keys out\n\n[app]\nhotkey = \"Command+K\"\n";
         assert_eq!(read_app(old).hotkey, "Command+K");
-        let cfg = AppConfig { excluded: vec!["~/Library/Caches".into()], launch_at_login: true, ..Default::default() };
+        let cfg = AppConfig {
+            excluded: vec!["~/Library/Caches".into()],
+            launch_at_login: true,
+            ..Default::default()
+        };
         let new = write_app(old, &cfg).unwrap();
         let t: toml::Table = new.parse().unwrap();
         assert_eq!(t["mcp"]["deny"][0].as_str(), Some("~/.ssh"));
-        assert!(new.contains("# my notes") && new.contains("# keep keys out"), "{new}");
+        assert!(
+            new.contains("# my notes") && new.contains("# keep keys out"),
+            "{new}"
+        );
         assert_eq!(read_app(&new), cfg);
         assert_eq!(read_app(""), AppConfig::default());
         assert!(write_app("not = [toml", &cfg).is_err());
@@ -209,7 +257,17 @@ mod tests {
         assert_eq!(hotkey_glyphs("Option+Space"), "⌥Space");
         assert!(parse_hotkey("Option+Nope").is_none());
         use eframe::egui::{Key, Modifiers as M};
-        assert_eq!(hotkey_from_egui(M { alt: true, ..M::NONE }, Key::Space).as_deref(), Some("Option+Space"));
+        assert_eq!(
+            hotkey_from_egui(
+                M {
+                    alt: true,
+                    ..M::NONE
+                },
+                Key::Space
+            )
+            .as_deref(),
+            Some("Option+Space")
+        );
         assert_eq!(hotkey_from_egui(M::NONE, Key::A), None);
     }
 

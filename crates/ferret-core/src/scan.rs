@@ -25,7 +25,10 @@ pub fn scan(root: &Path) -> Result<(Index, ScanStats)> {
 }
 
 /// `scan`, calling `progress(entries_so_far, current_path)` every 8192 entries.
-pub fn scan_with_progress(root: &Path, mut progress: impl FnMut(u64, &Path)) -> Result<(Index, ScanStats)> {
+pub fn scan_with_progress(
+    root: &Path,
+    mut progress: impl FnMut(u64, &Path),
+) -> Result<(Index, ScanStats)> {
     let start = Instant::now();
     let root_meta = std::fs::symlink_metadata(root)?; // fail fast on a missing root
     let mut index = Index::default();
@@ -46,7 +49,9 @@ pub fn scan_with_progress(root: &Path, mut progress: impl FnMut(u64, &Path)) -> 
     let job_rx = Mutex::new(job_rx);
     let (done_tx, done_rx) = mpsc::channel::<Done>();
     // Measured on 8 cores: past ~8 threads APFS lock contention only adds sys time.
-    let threads = std::thread::available_parallelism().map_or(8, |n| n.get()).min(8);
+    let threads = std::thread::available_parallelism()
+        .map_or(8, |n| n.get())
+        .min(8);
 
     std::thread::scope(|s| {
         for _ in 0..threads {
@@ -66,9 +71,15 @@ pub fn scan_with_progress(root: &Path, mut progress: impl FnMut(u64, &Path)) -> 
         }
         let mut job_tx = Some(job_tx);
         let mut pending = 1usize;
-        job_tx.as_ref().unwrap().send((0, root.to_path_buf())).unwrap();
+        job_tx
+            .as_ref()
+            .unwrap()
+            .send((0, root.to_path_buf()))
+            .unwrap();
         while pending > 0 {
-            let Ok((parent, dir, res)) = done_rx.recv() else { break };
+            let Ok((parent, dir, res)) = done_rx.recv() else {
+                break;
+            };
             pending -= 1;
             let entries = match res {
                 Ok(v) => v,
@@ -117,8 +128,16 @@ struct Entry {
 
 impl Entry {
     fn new(dir: &Path, raw: &std::ffi::OsStr, kind: Kind, size: u64, mtime: i64) -> Entry {
-        let dir_path = (kind == Kind::Dir).then(|| dir.join(raw)).filter(|p| !SKIP.iter().any(|s| p == Path::new(s)));
-        Entry { name: nfc(raw), kind, size: if kind == Kind::Dir { 0 } else { size }, mtime, dir_path }
+        let dir_path = (kind == Kind::Dir)
+            .then(|| dir.join(raw))
+            .filter(|p| !SKIP.iter().any(|s| p == Path::new(s)));
+        Entry {
+            name: nfc(raw),
+            kind,
+            size: if kind == Kind::Dir { 0 } else { size },
+            mtime,
+            dir_path,
+        }
     }
 }
 
@@ -144,7 +163,12 @@ fn list_dir(dir: &Path, buf: &mut Vec<u8>) -> io::Result<Vec<Entry>> {
 
     let c = std::ffi::CString::new(dir.as_os_str().to_owned().into_vec())?;
     // SAFETY: valid NUL-terminated path; fd is closed by OwnedFd.
-    let fd = unsafe { libc::open(c.as_ptr(), libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC) };
+    let fd = unsafe {
+        libc::open(
+            c.as_ptr(),
+            libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+        )
+    };
     if fd < 0 {
         return Err(io::Error::last_os_error());
     }
@@ -188,10 +212,18 @@ fn list_dir(dir: &Path, buf: &mut Vec<u8>) -> io::Result<Vec<Entry>> {
         for _ in 0..n {
             let Some(len) = rd_u32(buf, p) else { break };
             let len = len as usize;
-            let Some(e) = buf.get(p..p + len).filter(|_| len >= 4) else { break };
+            let Some(e) = buf.get(p..p + len).filter(|_| len >= 4) else {
+                break;
+            };
             p += len;
             if let Some((raw, kind, size, mtime)) = parse_entry(e, VDIR, VLNK) {
-                out.push(Entry::new(dir, std::ffi::OsStr::from_bytes(raw), kind, size, mtime));
+                out.push(Entry::new(
+                    dir,
+                    std::ffi::OsStr::from_bytes(raw),
+                    kind,
+                    size,
+                    mtime,
+                ));
             }
         }
     }
@@ -202,11 +234,15 @@ fn list_dir(dir: &Path, buf: &mut Vec<u8>) -> io::Result<Vec<Entry>> {
 const ATTR_CMN_ERROR: u32 = 0x2000_0000;
 
 fn rd_u32(b: &[u8], at: usize) -> Option<u32> {
-    Some(u32::from_ne_bytes(b.get(at..at.checked_add(4)?)?.try_into().ok()?))
+    Some(u32::from_ne_bytes(
+        b.get(at..at.checked_add(4)?)?.try_into().ok()?,
+    ))
 }
 
 fn rd_i64(b: &[u8], at: usize) -> Option<i64> {
-    Some(i64::from_ne_bytes(b.get(at..at.checked_add(8)?)?.try_into().ok()?))
+    Some(i64::from_ne_bytes(
+        b.get(at..at.checked_add(8)?)?.try_into().ok()?,
+    ))
 }
 
 /// Parse one packed getattrlistbulk record (`e` includes its leading length word).
@@ -266,7 +302,11 @@ fn meta_of(m: &std::fs::Metadata) -> (Kind, u64, i64) {
     } else {
         Kind::File
     };
-    let mtime = m.modified().ok().and_then(|t| t.duration_since(UNIX_EPOCH).ok()).map_or(0, |d| d.as_secs() as i64);
+    let mtime = m
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+        .map_or(0, |d| d.as_secs() as i64);
     (kind, if kind == Kind::Dir { 0 } else { m.len() }, mtime)
 }
 
@@ -286,7 +326,9 @@ fn add_tree(ix: &mut Index, parent: u32, path: &Path, name: &str, m: &std::fs::M
     if kind != Kind::Dir {
         return;
     }
-    let Ok(rd) = std::fs::read_dir(path) else { return };
+    let Ok(rd) = std::fs::read_dir(path) else {
+        return;
+    };
     for e in rd.flatten() {
         let p = e.path();
         if SKIP.iter().any(|s| p == Path::new(s)) {
@@ -315,7 +357,13 @@ pub fn rescan_dir(ix: &mut Index, dir: &Path) -> Result<Vec<PathBuf>> {
     };
     let rd = match std::fs::read_dir(&dir) {
         Ok(rd) => rd,
-        Err(e) if id != 0 && matches!(e.kind(), io::ErrorKind::NotFound | io::ErrorKind::NotADirectory) => {
+        Err(e)
+            if id != 0
+                && matches!(
+                    e.kind(),
+                    io::ErrorKind::NotFound | io::ErrorKind::NotADirectory
+                ) =>
+        {
             return rescan_dir(ix, dir.parent().unwrap_or(&dir));
         }
         Err(e) => return Err(e.into()),
@@ -323,7 +371,10 @@ pub fn rescan_dir(ix: &mut Index, dir: &Path) -> Result<Vec<PathBuf>> {
     if let Ok(m) = std::fs::symlink_metadata(&dir) {
         ix.nodes[id as usize].mtime = meta_of(&m).2;
     }
-    let mut old: HashMap<String, u32> = ix.children(id).map(|c| (ix.name(c).to_owned(), c)).collect();
+    let mut old: HashMap<String, u32> = ix
+        .children(id)
+        .map(|c| (ix.name(c).to_owned(), c))
+        .collect();
     let mut subdirs = Vec::new();
     for e in rd.flatten() {
         let p = e.path();
@@ -366,7 +417,10 @@ pub fn apply_path(ix: &mut Index, path: &Path) -> Result<()> {
     if SKIP.iter().any(|s| path == Path::new(s)) {
         return Ok(());
     }
-    let Some(pid) = ix.find(parent).filter(|&p| ix.nodes[p as usize].kind == Kind::Dir) else {
+    let Some(pid) = ix
+        .find(parent)
+        .filter(|&p| ix.nodes[p as usize].kind == Kind::Dir)
+    else {
         return rescan_dir(ix, parent).map(|_| ());
     };
     let name = nfc(raw);
@@ -431,7 +485,10 @@ mod tests {
         assert_eq!(ix.nodes[find("a") as usize].size, 0);
         assert_eq!(ix.nodes[find("link") as usize].kind, Kind::Symlink);
         let h = find(".hidden");
-        assert_eq!(ix.nodes[h as usize].flags & crate::index::FLAG_HIDDEN, crate::index::FLAG_HIDDEN);
+        assert_eq!(
+            ix.nodes[h as usize].flags & crate::index::FLAG_HIDDEN,
+            crate::index::FLAG_HIDDEN
+        );
         find("\u{e9}.txt"); // NFC
     }
 
@@ -441,7 +498,12 @@ mod tests {
         for e in rd.flatten() {
             let m = fs::symlink_metadata(e.path()).unwrap();
             let (kind, size, mtime) = meta_of(&m);
-            out.push((e.path().to_string_lossy().nfc().collect(), kind, size, mtime));
+            out.push((
+                e.path().to_string_lossy().nfc().collect(),
+                kind,
+                size,
+                mtime,
+            ));
             if kind == Kind::Dir {
                 reference(&e.path(), out);
             }
@@ -463,7 +525,10 @@ mod tests {
         fs::create_dir(r.join("d\u{301}ir")).unwrap();
         fs::write(r.join("d\u{301}ir/in"), b"").unwrap();
         std::os::unix::fs::symlink("a/b", r.join("link")).unwrap();
-        fs::File::create(r.join("big")).unwrap().set_len(5 << 30).unwrap();
+        fs::File::create(r.join("big"))
+            .unwrap()
+            .set_len(5 << 30)
+            .unwrap();
         fs::write(r.join("n".repeat(255)), b"").unwrap();
         fs::create_dir(r.join("locked")).unwrap();
         fs::write(r.join("locked/secret"), b"").unwrap();
@@ -488,7 +553,10 @@ mod tests {
     }
 
     fn live_paths(ix: &Index) -> Vec<String> {
-        let mut v: Vec<String> = (0..ix.len() as u32).filter(|&i| ix.is_live(i)).map(|i| ix.path(i)).collect();
+        let mut v: Vec<String> = (0..ix.len() as u32)
+            .filter(|&i| ix.is_live(i))
+            .map(|i| ix.path(i))
+            .collect();
         v.sort();
         v
     }
@@ -513,13 +581,24 @@ mod tests {
         fs::remove_dir_all(r.join("a/b")).unwrap();
         rescan_dir(&mut ix, &r.join("a")).unwrap();
 
-        let want: Vec<String> = ["", "/a", "/a/keep.txt", "/a/nd", "/a/nd/x", "/a/nd/x/in.txt", "/a/new.txt"]
-            .iter()
-            .map(|s| format!("{rs}{s}"))
-            .collect();
+        let want: Vec<String> = [
+            "",
+            "/a",
+            "/a/keep.txt",
+            "/a/nd",
+            "/a/nd/x",
+            "/a/nd/x/in.txt",
+            "/a/new.txt",
+        ]
+        .iter()
+        .map(|s| format!("{rs}{s}"))
+        .collect();
         assert_eq!(live_paths(&ix), want);
         assert_eq!(ix.live_count(), want.len());
-        assert_eq!(ix.nodes[ix.find(&r.join("a/keep.txt")).unwrap() as usize].size, 5);
+        assert_eq!(
+            ix.nodes[ix.find(&r.join("a/keep.txt")).unwrap() as usize].size,
+            5
+        );
         assert!(ix.find(&r.join("a/b/c/deep.txt")).is_none());
         // tombstones are hidden from search
         let res = crate::search(&ix, &crate::parse("deep").unwrap(), 10, crate::Sort::Score);
@@ -579,7 +658,10 @@ mod tests {
         // modify
         fs::write(r.join("a.txt"), b"12345").unwrap();
         apply_path(&mut ix, &r.join("a.txt")).unwrap();
-        assert_eq!(ix.nodes[ix.find(&r.join("a.txt")).unwrap() as usize].size, 5);
+        assert_eq!(
+            ix.nodes[ix.find(&r.join("a.txt")).unwrap() as usize].size,
+            5
+        );
         // new dir brings its subtree
         fs::create_dir_all(r.join("n/m")).unwrap();
         fs::write(r.join("n/m/deep"), b"").unwrap();

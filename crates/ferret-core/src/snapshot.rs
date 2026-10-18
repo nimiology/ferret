@@ -73,7 +73,10 @@ pub fn load_with(path: &Path) -> Result<(Index, Meta)> {
     if &head[..8] != MAGIC || version != VERSION {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
-            format!("{} is not a ferret v{VERSION} snapshot; re-run `ff index`", path.display()),
+            format!(
+                "{} is not a ferret v{VERSION} snapshot; re-run `ff index`",
+                path.display()
+            ),
         )
         .into());
     }
@@ -103,7 +106,10 @@ mod tests {
         assert_eq!(back.name_lower(f), "résumé.pdf".as_bytes());
         assert_eq!(back.nodes[f as usize].size, 42);
         assert_eq!(back.children(r).collect::<Vec<_>>(), vec![f]);
-        let meta = Meta { last_event_id: 99, volume_uuid: "U".into() };
+        let meta = Meta {
+            last_event_id: 99,
+            volume_uuid: "U".into(),
+        };
         save_with(&back, &meta, &p).unwrap();
         let (_, m) = load_with(&p).unwrap();
         assert_eq!((m.last_event_id, m.volume_uuid.as_str()), (99, "U"));

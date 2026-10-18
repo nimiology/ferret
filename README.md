@@ -7,26 +7,27 @@ Ferret indexes every file name on your disk once, keeps the index live with FSEv
 - `ff`: the CLI and an interactive picker (`ff -i`)
 - `ferretd`: a small background daemon that keeps the index in memory and up to date
 - `ff mcp`: an MCP server so Claude Code, Cursor and other agents can find files by name and metadata (never contents)
-- `ferret`: a native GUI search window (egui)
+- `Ferret.app`: a menu bar app with a ⌥Space search panel (egui, no webview)
 
-<!-- TODO: GIF slots. Record with vhs (see docs/demo/*.tape), then uncomment. -->
+<!-- Demo GIFs: record with vhs (see docs/demo/*.tape), then uncomment. -->
 <!-- ![ff in the terminal](docs/demo/ff.gif) -->
 <!-- ![Claude Code using ff mcp](docs/demo/mcp.gif) -->
 
 ## Install
 
 ```sh
-# Homebrew (TODO: tap not published yet; replace OWNER once the GitHub repo exists)
-brew install OWNER/ferret/ferret-cli OWNER/ferret/ferretd OWNER/ferret/ferret-app
+# CLI + daemon (ff, ferretd)
+brew install nimiology/ferret/ferret
 
 # From source (Rust stable)
-git clone https://github.com/OWNER/ferret && cd ferret   # TODO: real URL
-cargo install --path crates/ferret-cli    # ff
-cargo install --path crates/ferretd       # ferretd
-cargo install --path crates/ferret-app    # ferret (GUI)
+git clone https://github.com/nimiology/ferret && cd ferret
+cargo install --path crates/ferret        # ff + ferretd
+cargo install --path crates/ferret-app    # ferret (menu bar app binary)
 ```
 
-Release tarballs for Apple Silicon and Intel are attached to each GitHub release, with a shell installer.
+**Menu bar app:** download `Ferret-<version>-universal.dmg` from the [latest release](https://github.com/nimiology/ferret/releases/latest) (Apple Silicon and Intel). It isn't signed yet, so the first time, right-click Ferret.app → Open.
+
+Release tarballs for Apple Silicon and Intel, with a shell installer, are attached to each [GitHub release](https://github.com/nimiology/ferret/releases).
 
 ## Quick start
 
@@ -125,16 +126,15 @@ Measured on the author's Mac (Apple Silicon, internal SSD):
 
 ### vs `mdfind -name` and `find`
 
-<!-- TODO: run with hyperfine (not installed when this was written):
-hyperfine --warmup 1 --runs 3 \
-  "ff invoice" "mdfind -name invoice" "find ~/Documents -iname '*invoice*'"
--->
+Same name query, daemon running, measured with `hyperfine` (5 runs; `find` timed once):
 
-| Command | Mean time | Notes |
-|---|---|---|
-| `ff invoice` | TODO | |
-| `mdfind -name invoice` | TODO | Spotlight index |
-| `find ~/Documents -iname '*invoice*'` | TODO | ~/Documents only |
+| Command | Time | Matches | Searches |
+|---|---|---|---|
+| `ff invoice` | 37 ms ± 10 ms | 145 | the whole disk, including hidden and system folders |
+| `mdfind -name invoice` | 31 ms ± 2 ms | 70 | only what Spotlight indexes (skips hidden folders, `node_modules`, `.git`, many caches) |
+| `find ~ -iname '*invoice*'` | 99 s | | your home folder only |
+
+`ff` is as fast as Spotlight while seeing everything on disk, and about 2,700× faster than `find`.
 
 ## License
 

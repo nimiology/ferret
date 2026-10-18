@@ -3,11 +3,13 @@ use ferret_core::index::NO_PARENT;
 use ferret_core::{parse, search, Index, Kind, Sort};
 
 const WORDS: [&str; 24] = [
-    "report", "invoice", "photo", "Project", "notes", "backup", "draft", "final", "config", "main", "test",
-    "data", "image", "budget", "meeting", "readme", "src", "build", "assets", "lib", "cache", "client", "server",
-    "summary",
+    "report", "invoice", "photo", "Project", "notes", "backup", "draft", "final", "config", "main",
+    "test", "data", "image", "budget", "meeting", "readme", "src", "build", "assets", "lib",
+    "cache", "client", "server", "summary",
 ];
-const EXTS: [&str; 10] = ["pdf", "txt", "jpg", "png", "rs", "js", "json", "md", "swift", "docx"];
+const EXTS: [&str; 10] = [
+    "pdf", "txt", "jpg", "png", "rs", "js", "json", "md", "swift", "docx",
+];
 
 /// xorshift, deterministic.
 struct Rng(u64);

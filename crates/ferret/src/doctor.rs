@@ -15,11 +15,13 @@ fn line(ok: bool, msg: &str) -> String {
 
 /// Some(true) = readable, Some(false) = PermissionDenied, None = no probe dir exists.
 fn probe_fda(home: &Path) -> Option<bool> {
-    ["Library/Mail", "Library/Safari"].iter().find_map(|d| match std::fs::read_dir(home.join(d)) {
-        Ok(_) => Some(true),
-        Err(e) if e.kind() == ErrorKind::PermissionDenied => Some(false),
-        Err(_) => None,
-    })
+    ["Library/Mail", "Library/Safari"]
+        .iter()
+        .find_map(|d| match std::fs::read_dir(home.join(d)) {
+            Ok(_) => Some(true),
+            Err(e) if e.kind() == ErrorKind::PermissionDenied => Some(false),
+            Err(_) => None,
+        })
 }
 
 /// The FDA report: the ✓/✗ line plus, on ✗, the exact fix.
@@ -51,39 +53,68 @@ pub fn run() -> Result<()> {
     match std::fs::metadata(&snap) {
         Ok(m) => println!(
             "{}",
-            line(true, &format!(
-                "snapshot {} · {} · {} old",
-                snap.display(),
-                fmt_bytes(m.len()),
-                m.modified().map(age).unwrap_or_else(|_| "?".into())
-            ))
+            line(
+                true,
+                &format!(
+                    "snapshot {} · {} · {} old",
+                    snap.display(),
+                    fmt_bytes(m.len()),
+                    m.modified().map(age).unwrap_or_else(|_| "?".into())
+                )
+            )
         ),
-        Err(_) => println!("{}", line(false, &format!("snapshot missing at {} — run `ff index`", snap.display()))),
+        Err(_) => println!(
+            "{}",
+            line(
+                false,
+                &format!("snapshot missing at {} — run `ff index`", snap.display())
+            )
+        ),
     }
 
     match daemon::socket_status() {
         Some(s) => println!(
             "{}",
-            line(true, &format!(
-                "daemon socket reachable · {} files · last event {} · {}",
-                fmt_count(s.files),
-                s.last_event_id,
-                if s.indexing { "indexing" } else { "idle" }
-            ))
+            line(
+                true,
+                &format!(
+                    "daemon socket reachable · {} files · last event {} · {}",
+                    fmt_count(s.files),
+                    s.last_event_id,
+                    if s.indexing { "indexing" } else { "idle" }
+                )
+            )
         ),
-        None => println!("{}", line(false, "daemon socket unreachable — `ff daemon install`")),
+        None => println!(
+            "{}",
+            line(false, "daemon socket unreachable — `ff daemon install`")
+        ),
     }
 
     let p = daemon::plist_path();
     match (p.exists(), daemon::launchd_state()) {
-        (true, Some((true, pid))) => println!("{}", line(true, &format!("launchd agent running (pid {})", pid.unwrap_or_default()))),
+        (true, Some((true, pid))) => println!(
+            "{}",
+            line(
+                true,
+                &format!("launchd agent running (pid {})", pid.unwrap_or_default())
+            )
+        ),
         (true, _) => println!("{}", line(false, "launchd agent installed but not running")),
-        (false, _) => println!("{}", line(false, "launchd agent not installed — `ff daemon install`")),
+        (false, _) => println!(
+            "{}",
+            line(false, "launchd agent not installed — `ff daemon install`")
+        ),
     }
 
     let ferretd = daemon::ferretd_path().unwrap_or_else(|_| PathBuf::from("/path/to/ferretd"));
-    let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default();
-    println!("{}", fda_report(probe_fda(&home), &ferretd.display().to_string()));
+    let home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_default();
+    println!(
+        "{}",
+        fda_report(probe_fda(&home), &ferretd.display().to_string())
+    );
     Ok(())
 }
 
@@ -93,12 +124,17 @@ mod tests {
 
     #[test]
     fn fda_formatting() {
-        assert_eq!(fda_report(Some(true), "/x/ferretd"), "✓ Full Disk Access granted");
+        assert_eq!(
+            fda_report(Some(true), "/x/ferretd"),
+            "✓ Full Disk Access granted"
+        );
         let bad = fda_report(Some(false), "/x/ferretd");
         assert!(bad.starts_with("✗ Full Disk Access missing\n"));
         assert!(bad.contains("Full Disk Access → + → add /x/ferretd"));
         assert!(bad.contains("terminal app"));
-        assert!(bad.contains(r#"open "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles""#));
+        assert!(bad.contains(
+            r#"open "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles""#
+        ));
         assert!(fda_report(None, "/x").starts_with('✓'));
     }
 

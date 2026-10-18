@@ -1,2 +1,4 @@
 /target
+# Unpublished drafts (launch posts etc.)
+/.private/
 graphify-out/

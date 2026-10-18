@@ -1,18 +1,35 @@
 [package]
-name = "ferretd"
+name = "ferret"
+description = "Instant whole-disk file search for macOS: CLI, picker, live-updating daemon and MCP server"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+publish = false
+
+# Not on crates.io (the name is taken there), but released by dist: ff + ferretd in one formula.
+[package.metadata.dist]
+dist = true
+
+[[bin]]
+name = "ff"
+path = "src/main.rs"
 
 [[bin]]
 name = "ferretd"
-path = "src/main.rs"
+path = "src/bin/ferretd/main.rs"
 
 [dependencies]
 ferret-core = { path = "../ferret-core" }
+ferret-mcp = { path = "../ferret-mcp" }
+clap = { version = "4", features = ["derive"] }
+anyhow = "1"
+ratatui = "0.29"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 tokio = { version = "1", features = ["rt-multi-thread", "net", "io-util", "macros", "signal", "time"] }
 parking_lot = "0.12"
-serde_json = "1"
 tracing = "0.1"
 tracing-subscriber = "0.3"
 objc2-core-services = { version = "0.3", default-features = false, features = ["std", "FSEvents"] }

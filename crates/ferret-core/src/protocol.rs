@@ -113,7 +113,11 @@ pub struct Response {
 pub fn request(op: Op) -> std::io::Result<Response> {
     let mut s = UnixStream::connect(socket_path())?;
     s.set_read_timeout(Some(Duration::from_secs(5)))?;
-    let mut line = serde_json::to_vec(&Request { v: VERSION, id: 1, op })?;
+    let mut line = serde_json::to_vec(&Request {
+        v: VERSION,
+        id: 1,
+        op,
+    })?;
     line.push(b'\n');
     s.write_all(&line)?;
     let mut buf = String::new();
@@ -127,8 +131,10 @@ mod tests {
 
     #[test]
     fn wire_format_matches_plan() {
-        let r: Request =
-            serde_json::from_str(r#"{"v":1,"id":7,"op":"search","q":"invoice *.pdf","limit":50,"sort":"score"}"#).unwrap();
+        let r: Request = serde_json::from_str(
+            r#"{"v":1,"id":7,"op":"search","q":"invoice *.pdf","limit":50,"sort":"score"}"#,
+        )
+        .unwrap();
         assert!(matches!(r.op, Op::Search { ref q, limit: 50, .. } if q == "invoice *.pdf"));
         let r: Request = serde_json::from_str(r#"{"v":1,"id":8,"op":"status"}"#).unwrap();
         assert!(matches!(r.op, Op::Status));

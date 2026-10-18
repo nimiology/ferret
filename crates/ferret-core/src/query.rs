@@ -80,13 +80,19 @@ fn split_cmp(s: &str) -> (Cmp, &str) {
 
 /// "1.5" + "gb" -> (1.5, "gb")
 fn split_num(s: &str) -> Option<(f64, String)> {
-    let end = s.find(|c: char| !(c.is_ascii_digit() || c == '.')).unwrap_or(s.len());
+    let end = s
+        .find(|c: char| !(c.is_ascii_digit() || c == '.'))
+        .unwrap_or(s.len());
     let n: f64 = s[..end].parse().ok()?;
     Some((n, s[end..].to_ascii_lowercase()))
 }
 
 fn parse_size(v: &str) -> Result<(Cmp, u64)> {
-    let bad = || err(format!("bad size '{v}': use e.g. size:>100MB, size:<1.5GB (units B, KB, MB, GB, TB)"));
+    let bad = || {
+        err(format!(
+            "bad size '{v}': use e.g. size:>100MB, size:<1.5GB (units B, KB, MB, GB, TB)"
+        ))
+    };
     let (cmp, rest) = split_cmp(v);
     let (n, unit) = split_num(rest).ok_or_else(bad)?;
     let mult: u64 = match unit.as_str() {
@@ -101,10 +107,18 @@ fn parse_size(v: &str) -> Result<(Cmp, u64)> {
 }
 
 fn parse_age(v: &str) -> Result<(Cmp, i64)> {
-    let bad = || err(format!("bad age '{v}': use e.g. mod:<7d, mod:>1y (units s, m, h, d, w, y)"));
+    let bad = || {
+        err(format!(
+            "bad age '{v}': use e.g. mod:<7d, mod:>1y (units s, m, h, d, w, y)"
+        ))
+    };
     let (cmp, rest) = split_cmp(v);
     // No operator on an age means "within".
-    let cmp = if v.starts_with('=') || v.starts_with(['<', '>']) { cmp } else { Cmp::Lt };
+    let cmp = if v.starts_with('=') || v.starts_with(['<', '>']) {
+        cmp
+    } else {
+        Cmp::Lt
+    };
     let (n, unit) = split_num(rest).ok_or_else(bad)?;
     let mult: i64 = match unit.as_str() {
         "s" => 1,
@@ -257,7 +271,10 @@ mod tests {
 
     #[test]
     fn size() {
-        assert_eq!(parse("size:>100MB").unwrap().size, Some((Cmp::Gt, 100 << 20)));
+        assert_eq!(
+            parse("size:>100MB").unwrap().size,
+            Some((Cmp::Gt, 100 << 20))
+        );
         assert_eq!(parse("size:<1kb").unwrap().size, Some((Cmp::Lt, 1024)));
         assert_eq!(parse("size:=10").unwrap().size, Some((Cmp::Eq, 10)));
         assert_eq!(parse("size:>1.5GB").unwrap().size, Some((Cmp::Gt, 3 << 29)));
@@ -268,18 +285,36 @@ mod tests {
 
     #[test]
     fn modified() {
-        assert_eq!(parse("mod:<7d").unwrap().modified_within, Some((Cmp::Lt, 7 * 86_400)));
-        assert_eq!(parse("mod:>1y").unwrap().modified_within, Some((Cmp::Gt, 365 * 86_400)));
-        assert_eq!(parse("mod:2h").unwrap().modified_within, Some((Cmp::Lt, 7200)));
-        assert_eq!(parse("mod:<30m").unwrap().modified_within, Some((Cmp::Lt, 1800)));
-        assert_eq!(parse("mod:<1w").unwrap().modified_within, Some((Cmp::Lt, 604_800)));
+        assert_eq!(
+            parse("mod:<7d").unwrap().modified_within,
+            Some((Cmp::Lt, 7 * 86_400))
+        );
+        assert_eq!(
+            parse("mod:>1y").unwrap().modified_within,
+            Some((Cmp::Gt, 365 * 86_400))
+        );
+        assert_eq!(
+            parse("mod:2h").unwrap().modified_within,
+            Some((Cmp::Lt, 7200))
+        );
+        assert_eq!(
+            parse("mod:<30m").unwrap().modified_within,
+            Some((Cmp::Lt, 1800))
+        );
+        assert_eq!(
+            parse("mod:<1w").unwrap().modified_within,
+            Some((Cmp::Lt, 604_800))
+        );
         assert!(parse("mod:<7").is_err());
     }
 
     #[test]
     fn under() {
         let home = std::env::var("HOME").unwrap();
-        assert_eq!(parse("in:~/Projects/").unwrap().under, Some(format!("{home}/Projects")));
+        assert_eq!(
+            parse("in:~/Projects/").unwrap().under,
+            Some(format!("{home}/Projects"))
+        );
         assert_eq!(parse("in:/tmp").unwrap().under.as_deref(), Some("/tmp"));
         assert_eq!(parse("in:/").unwrap().under.as_deref(), Some("/"));
         assert!(parse("in:").is_err());
@@ -293,7 +328,8 @@ mod tests {
 
     #[test]
     fn combo() {
-        let q = parse(r#"invoice "Q1 2025" *.pdf !draft size:>1MB mod:<30d in:/Users type:file"#).unwrap();
+        let q = parse(r#"invoice "Q1 2025" *.pdf !draft size:>1MB mod:<30d in:/Users type:file"#)
+            .unwrap();
         assert_eq!(q.words, ["invoice", "q1 2025"]);
         assert_eq!(q.not_words, ["draft"]);
         assert_eq!(q.exts, ["pdf"]);
@@ -313,6 +349,9 @@ mod tests {
         // NFD input is normalized to NFC like the index
         assert_eq!(parse("cafe\u{301}").unwrap().words, ["caf\u{e9}"]);
         // `.` and `..` resolved
-        assert_eq!(parse("in:/a/b/../c/./d").unwrap().under.as_deref(), Some("/a/c/d"));
+        assert_eq!(
+            parse("in:/a/b/../c/./d").unwrap().under.as_deref(),
+            Some("/a/c/d")
+        );
     }
 }

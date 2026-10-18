@@ -131,11 +131,23 @@ fn main() -> Result<()> {
         },
         Cmd::Big(a) => {
             let text = format!("type:file {}", a.query.join(" "));
-            run_search(&text, a.limit, protocol::SortArg::Size, &a.out, Some(Line::Size))
+            run_search(
+                &text,
+                a.limit,
+                protocol::SortArg::Size,
+                &a.out,
+                Some(Line::Size),
+            )
         }
         Cmd::Recent(a) => {
             let text = recent_query(&a.query);
-            run_search(&text, a.limit, protocol::SortArg::Mtime, &a.out, Some(Line::Age))
+            run_search(
+                &text,
+                a.limit,
+                protocol::SortArg::Mtime,
+                &a.out,
+                Some(Line::Age),
+            )
         }
         Cmd::Mcp => tokio::runtime::Runtime::new()?.block_on(ferret_mcp::run()),
         Cmd::Query(a) if a.interactive => picker::run(&a.query.join(" "), a.dirs),
@@ -152,7 +164,11 @@ fn main() -> Result<()> {
 
 /// Files only, newest first; default window mod:<1d unless the user gave a mod: filter.
 fn recent_query(words: &[String]) -> String {
-    let m = if words.iter().any(|w| w.starts_with("mod:")) { "" } else { "mod:<1d " };
+    let m = if words.iter().any(|w| w.starts_with("mod:")) {
+        ""
+    } else {
+        "mod:<1d "
+    };
     format!("type:file {m}{}", words.join(" "))
 }
 
@@ -199,15 +215,35 @@ pub struct Found {
 }
 
 /// Ask the daemon. Outer Err = daemon unreachable; inner Err = daemon rejected the query.
-pub fn search_daemon(q: &str, limit: usize, sort: protocol::SortArg, kind: KindFilter) -> std::io::Result<Result<Found>> {
-    let r = protocol::request(Op::Search { q: q.to_string(), limit, sort, kind })?;
+pub fn search_daemon(
+    q: &str,
+    limit: usize,
+    sort: protocol::SortArg,
+    kind: KindFilter,
+) -> std::io::Result<Result<Found>> {
+    let r = protocol::request(Op::Search {
+        q: q.to_string(),
+        limit,
+        sort,
+        kind,
+    })?;
     Ok(match r.error {
         Some(e) => Err(anyhow::anyhow!(e)),
-        None => Ok(Found { hits: r.hits, total: r.total, took_us: r.took_us }),
+        None => Ok(Found {
+            hits: r.hits,
+            total: r.total,
+            took_us: r.took_us,
+        }),
     })
 }
 
-pub fn search_local(index: &Index, q: &str, limit: usize, sort: protocol::SortArg, kind: KindFilter) -> Result<Found> {
+pub fn search_local(
+    index: &Index,
+    q: &str,
+    limit: usize,
+    sort: protocol::SortArg,
+    kind: KindFilter,
+) -> Result<Found> {
     let mut q = ferret_core::parse(q).map_err(|e| anyhow::anyhow!("{e}"))?;
     match kind {
         KindFilter::All => {}
@@ -215,8 +251,21 @@ pub fn search_local(index: &Index, q: &str, limit: usize, sort: protocol::SortAr
         KindFilter::Dir => q.kind = Some(Kind::Dir),
     }
     let r = ferret_core::search(index, &q, limit, sort.into());
-    let hits = r.hits.into_iter().map(|h| HitOut { path: h.path, kind: h.kind, size: h.size, mtime: h.mtime }).collect();
-    Ok(Found { hits, total: r.total, took_us: r.took_us })
+    let hits = r
+        .hits
+        .into_iter()
+        .map(|h| HitOut {
+            path: h.path,
+            kind: h.kind,
+            size: h.size,
+            mtime: h.mtime,
+        })
+        .collect();
+    Ok(Found {
+        hits,
+        total: r.total,
+        took_us: r.took_us,
+    })
 }
 
 pub fn load_snapshot() -> Result<Index> {
@@ -224,7 +273,12 @@ pub fn load_snapshot() -> Result<Index> {
     if !path.exists() {
         bail!("no index yet — run `ff index` first");
     }
-    snapshot::load(&path).with_context(|| format!("could not read index at {} (try `ff index` again)", path.display()))
+    snapshot::load(&path).with_context(|| {
+        format!(
+            "could not read index at {} (try `ff index` again)",
+            path.display()
+        )
+    })
 }
 
 fn run_index(a: IndexArgs) -> Result<()> {
@@ -237,12 +291,18 @@ fn run_index(a: IndexArgs) -> Result<()> {
         .with_context(|| format!("could not scan {}", a.root.display()))?;
     let path = snapshot::default_path();
     if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir).with_context(|| format!("could not create {}", dir.display()))?;
+        std::fs::create_dir_all(dir)
+            .with_context(|| format!("could not create {}", dir.display()))?;
     }
-    snapshot::save_with(&index, &meta, &path).with_context(|| format!("could not save snapshot to {}", path.display()))?;
+    snapshot::save_with(&index, &meta, &path)
+        .with_context(|| format!("could not save snapshot to {}", path.display()))?;
     let disk = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
 
-    println!("indexed {} files in {:.2?}", fmt_count(st.files), st.elapsed);
+    println!(
+        "indexed {} files in {:.2?}",
+        fmt_count(st.files),
+        st.elapsed
+    );
     if a.stats {
         let mem = index.nodes.len() * std::mem::size_of::<Node>()
             + index.names.len()
@@ -255,7 +315,11 @@ fn run_index(a: IndexArgs) -> Result<()> {
         println!("  scan time          {:.2?}", st.elapsed);
         println!("  nodes              {}", index.nodes.len());
         println!("  approx memory      {}", fmt_bytes(mem as u64));
-        println!("  snapshot           {} ({})", fmt_bytes(disk), path.display());
+        println!(
+            "  snapshot           {} ({})",
+            fmt_bytes(disk),
+            path.display()
+        );
     }
     if st.permission_denied > 0 {
         eprintln!(
@@ -267,7 +331,13 @@ fn run_index(a: IndexArgs) -> Result<()> {
     Ok(())
 }
 
-fn run_search(text: &str, limit: usize, sort: protocol::SortArg, o: &OutArgs, prefix: Option<Line>) -> Result<()> {
+fn run_search(
+    text: &str,
+    limit: usize,
+    sort: protocol::SortArg,
+    o: &OutArgs,
+    prefix: Option<Line>,
+) -> Result<()> {
     let q = ferret_core::parse(text).map_err(|e| anyhow::anyhow!("{e}"))?;
     let (found, indexed) = match search_daemon(text, limit, sort, KindFilter::All) {
         Ok(r) => (r?, None),
@@ -276,7 +346,10 @@ fn run_search(text: &str, limit: usize, sort: protocol::SortArg, o: &OutArgs, pr
                 eprintln!("{e:#}");
                 std::process::exit(1);
             });
-            (search_local(&index, text, limit, sort, KindFilter::All)?, Some(index.nodes.len()))
+            (
+                search_local(&index, text, limit, sort, KindFilter::All)?,
+                Some(index.nodes.len()),
+            )
         }
     };
 
@@ -294,9 +367,15 @@ fn run_search(text: &str, limit: usize, sort: protocol::SortArg, o: &OutArgs, pr
         return Ok(());
     }
     let tty = std::io::stdout().is_terminal() && std::env::var_os("NO_COLOR").is_none();
-    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64);
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs() as i64);
     for h in &found.hits {
-        let path = if tty { highlight(&h.path, &q.words) } else { h.path.clone() };
+        let path = if tty {
+            highlight(&h.path, &q.words)
+        } else {
+            h.path.clone()
+        };
         let line = match prefix {
             None => path,
             Some(Line::Size) => format!("{:>10}  {path}", fmt_bytes(h.size)),
@@ -307,8 +386,14 @@ fn run_search(text: &str, limit: usize, sort: protocol::SortArg, o: &OutArgs, pr
         }
     }
     if tty {
-        let tail = indexed.map_or(" · daemon".to_string(), |n| format!(" · {} files indexed", fmt_count(n as u64)));
-        eprintln!("{DIM}{} matches · {} ms{tail}{RESET}", found.total, found.took_us / 1000);
+        let tail = indexed.map_or(" · daemon".to_string(), |n| {
+            format!(" · {} files indexed", fmt_count(n as u64))
+        });
+        eprintln!(
+            "{DIM}{} matches · {} ms{tail}{RESET}",
+            found.total,
+            found.took_us / 1000
+        );
     }
     Ok(())
 }
@@ -324,7 +409,9 @@ pub fn match_mask<'a>(path: &'a str, words: &[String]) -> (&'a str, &'a str, Vec
         let w = w.to_ascii_lowercase();
         let mut from = 0;
         while let Some(i) = lower[from..].find(&w) {
-            hit[from + i..from + i + w.len()].iter_mut().for_each(|b| *b = true);
+            hit[from + i..from + i + w.len()]
+                .iter_mut()
+                .for_each(|b| *b = true);
             from += i + w.len();
         }
     }
@@ -337,7 +424,9 @@ pub fn runs<'a>(name: &'a str, hit: &[bool]) -> Vec<(&'a str, bool)> {
     let mut i = 0;
     while i < name.len() {
         let on = hit[i];
-        let j = (i..name.len()).find(|&k| hit[k] != on).unwrap_or(name.len());
+        let j = (i..name.len())
+            .find(|&k| hit[k] != on)
+            .unwrap_or(name.len());
         v.push((&name[i..j], on));
         i = j;
     }
@@ -364,7 +453,11 @@ fn highlight(path: &str, words: &[String]) -> String {
 /// 2_100_000 -> "2.1M", 840_000 -> "840K", 999 -> "999".
 pub fn fmt_count(n: u64) -> String {
     let f = |v: f64, u: &str| {
-        let s = if v < 10.0 { format!("{v:.1}") } else { format!("{v:.0}") };
+        let s = if v < 10.0 {
+            format!("{v:.1}")
+        } else {
+            format!("{v:.0}")
+        };
         format!("{}{u}", s.trim_end_matches(".0"))
     };
     match n {
@@ -408,7 +501,10 @@ mod tests {
 
     #[test]
     fn query_flags_after_words() {
-        let Cmd::Query(a) = dispatch(&argv("ff old invoice --limit 5 --sort mtime")).unwrap() else { panic!() };
+        let Cmd::Query(a) = dispatch(&argv("ff old invoice --limit 5 --sort mtime")).unwrap()
+        else {
+            panic!()
+        };
         assert_eq!(a.query, ["old", "invoice"]);
         assert_eq!(a.limit, 5);
         assert_eq!(a.sort, SortArg::Mtime);
@@ -417,31 +513,52 @@ mod tests {
 
     #[test]
     fn interactive_without_query() {
-        let Cmd::Query(a) = dispatch(&argv("ff -i --dirs")).unwrap() else { panic!() };
+        let Cmd::Query(a) = dispatch(&argv("ff -i --dirs")).unwrap() else {
+            panic!()
+        };
         assert!(a.interactive && a.dirs && a.query.is_empty());
         assert!(dispatch(&argv("ff")).is_err());
     }
 
     #[test]
     fn subcommands() {
-        assert!(matches!(dispatch(&argv("ff index --root /tmp")).unwrap(), Cmd::Index(a) if a.root.as_os_str() == "/tmp"));
-        assert!(matches!(dispatch(&argv("ff daemon status")).unwrap(), Cmd::Daemon(a) if a.action == "status"));
+        assert!(
+            matches!(dispatch(&argv("ff index --root /tmp")).unwrap(), Cmd::Index(a) if a.root.as_os_str() == "/tmp")
+        );
+        assert!(
+            matches!(dispatch(&argv("ff daemon status")).unwrap(), Cmd::Daemon(a) if a.action == "status")
+        );
         assert!(dispatch(&argv("ff daemon bogus")).is_err());
         assert!(matches!(dispatch(&argv("ff doctor")).unwrap(), Cmd::Doctor));
         // `--` searches for a word that is also a subcommand name
-        assert!(matches!(dispatch(&argv("ff -- big pdf")).unwrap(), Cmd::Query(a) if a.query == ["big", "pdf"]));
-        assert!(matches!(dispatch(&argv("ff init zsh")).unwrap(), Cmd::Init(a) if a.shell == "zsh"));
+        assert!(
+            matches!(dispatch(&argv("ff -- big pdf")).unwrap(), Cmd::Query(a) if a.query == ["big", "pdf"])
+        );
+        assert!(
+            matches!(dispatch(&argv("ff init zsh")).unwrap(), Cmd::Init(a) if a.shell == "zsh")
+        );
     }
 
     #[test]
     fn output_and_list_commands() {
-        let Cmd::Query(a) = dispatch(&argv("ff pdf --json")).unwrap() else { panic!() };
+        let Cmd::Query(a) = dispatch(&argv("ff pdf --json")).unwrap() else {
+            panic!()
+        };
         assert!(a.out.json && a.query == ["pdf"]);
-        let Cmd::Query(a) = dispatch(&argv("ff pdf -0")).unwrap() else { panic!() };
+        let Cmd::Query(a) = dispatch(&argv("ff pdf -0")).unwrap() else {
+            panic!()
+        };
         assert!(a.out.null);
-        let Cmd::Big(a) = dispatch(&argv("ff big in:~/Downloads --limit 5 --null")).unwrap() else { panic!() };
-        assert_eq!((a.query.as_slice(), a.limit, a.out.null), (&["in:~/Downloads".to_string()][..], 5, true));
-        let Cmd::Recent(a) = dispatch(&argv("ff recent --json")).unwrap() else { panic!() };
+        let Cmd::Big(a) = dispatch(&argv("ff big in:~/Downloads --limit 5 --null")).unwrap() else {
+            panic!()
+        };
+        assert_eq!(
+            (a.query.as_slice(), a.limit, a.out.null),
+            (&["in:~/Downloads".to_string()][..], 5, true)
+        );
+        let Cmd::Recent(a) = dispatch(&argv("ff recent --json")).unwrap() else {
+            panic!()
+        };
         assert_eq!((a.limit, a.out.json), (20, true));
         assert!(matches!(dispatch(&argv("ff mcp")).unwrap(), Cmd::Mcp));
     }
@@ -449,7 +566,10 @@ mod tests {
     #[test]
     fn recent_defaults_to_one_day() {
         assert_eq!(recent_query(&[]), "type:file mod:<1d ");
-        assert_eq!(recent_query(&["mod:<7d".into(), "pdf".into()]), "type:file mod:<7d pdf");
+        assert_eq!(
+            recent_query(&["mod:<7d".into(), "pdf".into()]),
+            "type:file mod:<7d pdf"
+        );
         assert!(ferret_core::parse(&recent_query(&["x".into()])).is_ok());
         assert_eq!(ago(30), "30s ago");
         assert_eq!(ago(180), "3m ago");
@@ -462,9 +582,15 @@ mod tests {
         let f = Found {
             total: 1,
             took_us: 7,
-            hits: vec![HitOut { path: "/a".into(), kind: Kind::File, size: 3, mtime: 9 }],
+            hits: vec![HitOut {
+                path: "/a".into(),
+                kind: Kind::File,
+                size: 3,
+                mtime: 9,
+            }],
         };
-        let v: serde_json::Value = serde_json::from_str(&serde_json::to_string(&f).unwrap()).unwrap();
+        let v: serde_json::Value =
+            serde_json::from_str(&serde_json::to_string(&f).unwrap()).unwrap();
         assert_eq!(v["total"], 1);
         assert_eq!(v["took_us"], 7);
         assert_eq!(v["hits"][0]["path"], "/a");
@@ -482,7 +608,10 @@ mod tests {
             .spawn()
         {
             child.stdin.take().unwrap().write_all(s.as_bytes()).unwrap();
-            assert!(child.wait().unwrap().success(), "zsh -n rejected the snippet");
+            assert!(
+                child.wait().unwrap().success(),
+                "zsh -n rejected the snippet"
+            );
         }
     }
 }

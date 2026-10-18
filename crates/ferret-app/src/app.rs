@@ -4,8 +4,8 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use eframe::egui::{
-    self, text::LayoutJob, Align2, Color32, FontId, Key, Modifiers, Pos2, Rect, Rounding, Sense, Stroke,
-    TextFormat, UiBuilder, Vec2,
+    self, text::LayoutJob, Align2, Color32, FontId, Key, Modifiers, Pos2, Rect, Rounding, Sense,
+    Stroke, TextFormat, UiBuilder, Vec2,
 };
 use ferret_core::protocol::{self, HitOut, KindFilter, Op, Response, SortArg, Status};
 use ferret_core::{snapshot, Hit, Index, Kind, Query, SearchResult};
@@ -22,7 +22,11 @@ const MCP_LINE: &str = "claude mcp add --scope user ferret -- ff mcp";
 const FDA_URL: &str = "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles";
 
 /// Screen 03a "Try" cards.
-const TRIES: [(&str, &str); 3] = [("*.pdf", "All PDF files"), ("size:>1GB", "Files over 1 GB"), ("mod:<7d", "Changed this week")];
+const TRIES: [(&str, &str); 3] = [
+    ("*.pdf", "All PDF files"),
+    ("size:>1GB", "Files over 1 GB"),
+    ("mod:<7d", "Changed this week"),
+];
 /// Screen 03b hints, in the syntax ferret_core::parse accepts (`in:` / `!word`, not the mockup's `path:` / `-word`).
 const SYNTAX: [(&str, &str); 6] = [
     ("ext:pdf", "File extension"),
@@ -40,7 +44,11 @@ type Snap = Arc<OnceLock<Option<Index>>>;
 type Counts = [usize; 3];
 
 /// (generation, query words, (result, came from daemon, tab counts) or error)
-type Reply = (u64, Vec<String>, Result<(SearchResult, bool, Counts), String>);
+type Reply = (
+    u64,
+    Vec<String>,
+    Result<(SearchResult, bool, Counts), String>,
+);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Tab {
@@ -84,7 +92,12 @@ impl Tab {
 /// What to ask the daemon for: (query, kind, sort, limit). Empty query = the "Recent" list of screen 03a.
 pub fn plan(tab: Tab, query: &str) -> (String, KindFilter, SortArg, usize) {
     if query.trim().is_empty() {
-        return ("mod:<7d".into(), KindFilter::File, SortArg::Mtime, RECENT_LIMIT);
+        return (
+            "mod:<7d".into(),
+            KindFilter::File,
+            SortArg::Mtime,
+            RECENT_LIMIT,
+        );
     }
     let (kind, sort) = match tab {
         Tab::All => (KindFilter::All, SortArg::Score),
@@ -214,13 +227,22 @@ impl App {
         self.generation += 1;
         let (q, kind, sort, limit) = plan(self.tab, &self.query);
         let counts_too = !self.query.trim().is_empty();
-        let (gen, snap, tx, ctx) = (self.generation, self.snap.clone(), self.tx.clone(), self.ctx.clone());
+        let (gen, snap, tx, ctx) = (
+            self.generation,
+            self.snap.clone(),
+            self.tx.clone(),
+            self.ctx.clone(),
+        );
         std::thread::spawn(move || {
             let reply = match ferret_core::parse(&q) {
                 Ok(parsed) => {
                     // One request: the reply's per-kind counts fill every tab.
                     let res = fetch(&q, &parsed, kind, sort, limit, &snap).map(|(r, live)| {
-                        let counts = if counts_too { tab_counts(r.by_kind, parsed.kind) } else { [0; 3] };
+                        let counts = if counts_too {
+                            tab_counts(r.by_kind, parsed.kind)
+                        } else {
+                            [0; 3]
+                        };
                         (r, live, counts)
                     });
                     (gen, parsed.words, res)
@@ -262,7 +284,13 @@ impl App {
     }
 
     fn view(&self) -> View {
-        pick_view(self.fda, &self.query, self.hits.len(), self.received != self.generation, self.error.is_some())
+        pick_view(
+            self.fda,
+            &self.query,
+            self.hits.len(),
+            self.received != self.generation,
+            self.error.is_some(),
+        )
     }
 
     fn set_query(&mut self, q: &str) {
@@ -398,7 +426,10 @@ impl App {
         if !self.positioned {
             if let Some(m) = monitor {
                 self.positioned = true;
-                ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(Pos2::new((m.x - W) / 2.0, m.y * 0.18)));
+                ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(Pos2::new(
+                    (m.x - W) / 2.0,
+                    m.y * 0.18,
+                )));
             }
         }
         if let Some(f) = focused {
@@ -436,10 +467,16 @@ impl eframe::App for App {
         let t = theme::current(ctx.style().visuals.dark_mode);
 
         egui::CentralPanel::default()
-            .frame(egui::Frame::none().fill(t.panel).stroke(st(1.0, t.line)).rounding(12.0))
+            .frame(
+                egui::Frame::none()
+                    .fill(t.panel)
+                    .stroke(st(1.0, t.line))
+                    .rounding(12.0),
+            )
             .show(ctx, |ui| {
                 let full = ui.max_rect();
-                let footer = Rect::from_min_max(Pos2::new(full.left(), full.bottom() - 34.0), full.max);
+                let footer =
+                    Rect::from_min_max(Pos2::new(full.left(), full.bottom() - 34.0), full.max);
                 let body = Rect::from_min_max(full.min, Pos2::new(full.right(), footer.top()));
                 ui.allocate_new_ui(UiBuilder::new().max_rect(body), |ui| {
                     ui.spacing_mut().item_spacing.y = 0.0;
@@ -462,7 +499,9 @@ impl eframe::App for App {
                         }
                     }
                 });
-                ui.allocate_new_ui(UiBuilder::new().max_rect(footer), |ui| self.footer(ui, t, footer));
+                ui.allocate_new_ui(UiBuilder::new().max_rect(footer), |ui| {
+                    self.footer(ui, t, footer)
+                });
             });
 
         if self.settings_open {
@@ -483,52 +522,82 @@ fn hline(ui: &egui::Ui, t: &Theme, y: f32) {
 
 impl App {
     fn search_field(&mut self, ui: &mut egui::Ui, t: &Theme) {
-        let (rect, _) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 60.0), Sense::hover());
+        let (rect, _) =
+            ui.allocate_exact_size(Vec2::new(ui.available_width(), 60.0), Sense::hover());
         hline(ui, t, rect.bottom());
         let inner = rect.shrink2(Vec2::new(18.0, 0.0));
-        ui.allocate_new_ui(UiBuilder::new().max_rect(inner).layout(egui::Layout::left_to_right(egui::Align::Center)), |ui| {
-            ui.spacing_mut().item_spacing.x = 12.0;
-            let (r, _) = ui.allocate_exact_size(Vec2::splat(18.0), Sense::hover());
-            let p = ui.painter();
-            let c = r.min + Vec2::splat(7.5);
-            p.circle_stroke(c, 5.75, st(1.6, t.mu));
-            p.line_segment([r.min + Vec2::splat(12.0), r.min + Vec2::splat(16.0)], st(1.6, t.mu));
+        ui.allocate_new_ui(
+            UiBuilder::new()
+                .max_rect(inner)
+                .layout(egui::Layout::left_to_right(egui::Align::Center)),
+            |ui| {
+                ui.spacing_mut().item_spacing.x = 12.0;
+                let (r, _) = ui.allocate_exact_size(Vec2::splat(18.0), Sense::hover());
+                let p = ui.painter();
+                let c = r.min + Vec2::splat(7.5);
+                p.circle_stroke(c, 5.75, st(1.6, t.mu));
+                p.line_segment(
+                    [r.min + Vec2::splat(12.0), r.min + Vec2::splat(16.0)],
+                    st(1.6, t.mu),
+                );
 
-            let edit = egui::TextEdit::singleline(&mut self.query)
-                .frame(false)
-                .hint_text(egui::RichText::new("Search files…").color(t.fa))
-                .text_color(t.tx)
-                .font(FontId::proportional(19.0))
-                .desired_width(ui.available_width() - 40.0);
-            let resp = ui.add(edit);
-            if !self.settings_open {
-                resp.request_focus();
-            }
-            if resp.changed() {
-                self.try_focus = None;
-                self.run_search();
-            }
-            if !self.query.is_empty() {
-                keycap(ui, t, "esc");
-            }
-        });
+                let edit = egui::TextEdit::singleline(&mut self.query)
+                    .frame(false)
+                    .hint_text(egui::RichText::new("Search files…").color(t.fa))
+                    .text_color(t.tx)
+                    .font(FontId::proportional(19.0))
+                    .desired_width(ui.available_width() - 40.0);
+                let resp = ui.add(edit);
+                if !self.settings_open {
+                    resp.request_focus();
+                }
+                if resp.changed() {
+                    self.try_focus = None;
+                    self.run_search();
+                }
+                if !self.query.is_empty() {
+                    keycap(ui, t, "esc");
+                }
+            },
+        );
     }
 
     /// Screen 04: shown while the daemon is still scanning; results below keep working.
     fn banner(&self, ui: &mut egui::Ui, t: &Theme) {
-        let Some(s) = self.status.lock().unwrap().clone().filter(|s| s.indexing) else { return };
-        let (rect, _) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 52.0), Sense::hover());
+        let Some(s) = self.status.lock().unwrap().clone().filter(|s| s.indexing) else {
+            return;
+        };
+        let (rect, _) =
+            ui.allocate_exact_size(Vec2::new(ui.available_width(), 52.0), Sense::hover());
         let p = ui.painter();
         p.rect_filled(rect, 0.0, t.sub);
         hline(ui, t, rect.bottom());
         let x = rect.left() + 18.0;
-        p.text(Pos2::new(x, rect.top() + 14.0), Align2::LEFT_CENTER, format!("Indexing… {} files", fmt_commas(s.files)), FontId::proportional(13.0), t.tx);
+        p.text(
+            Pos2::new(x, rect.top() + 14.0),
+            Align2::LEFT_CENTER,
+            format!("Indexing… {} files", fmt_commas(s.files)),
+            FontId::proportional(13.0),
+            t.tx,
+        );
         let path = s.current_path.as_deref().map(tilde).unwrap_or_default();
         let pct = format!("{} · {:.0}%", path, s.progress.clamp(0.0, 1.0) * 100.0);
         let mut job = LayoutJob::simple_singleline(pct, FontId::monospace(11.0), t.mu);
-        job.wrap = egui::text::TextWrapping { max_width: rect.width() - 36.0, max_rows: 1, break_anywhere: true, ..Default::default() };
-        p.galley(Pos2::new(x, rect.top() + 24.0), ui.fonts(|f| f.layout_job(job)), t.mu);
-        let track = Rect::from_min_size(Pos2::new(x, rect.bottom() - 10.0), Vec2::new(rect.width() - 36.0, 3.0));
+        job.wrap = egui::text::TextWrapping {
+            max_width: rect.width() - 36.0,
+            max_rows: 1,
+            break_anywhere: true,
+            ..Default::default()
+        };
+        p.galley(
+            Pos2::new(x, rect.top() + 24.0),
+            ui.fonts(|f| f.layout_job(job)),
+            t.mu,
+        );
+        let track = Rect::from_min_size(
+            Pos2::new(x, rect.bottom() - 10.0),
+            Vec2::new(rect.width() - 36.0, 3.0),
+        );
         p.rect_filled(track, 2.0, t.line);
         let mut fill = track;
         fill.set_width(track.width() * s.progress.clamp(0.0, 1.0));
@@ -536,25 +605,51 @@ impl App {
     }
 
     fn tab_bar(&mut self, ui: &mut egui::Ui, t: &Theme) {
-        let (rect, _) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 36.0), Sense::hover());
+        let (rect, _) =
+            ui.allocate_exact_size(Vec2::new(ui.available_width(), 36.0), Sense::hover());
         hline(ui, t, rect.bottom());
         let mut x = rect.left() + 10.0;
         let mut clicked = None;
         for tab in TABS {
             let on = tab == self.tab;
             let font = FontId::proportional(12.5);
-            let label = ui.fonts(|f| f.layout_no_wrap(tab.label().into(), font.clone(), if on { t.tx } else { t.mu }));
+            let label = ui.fonts(|f| {
+                f.layout_no_wrap(
+                    tab.label().into(),
+                    font.clone(),
+                    if on { t.tx } else { t.mu },
+                )
+            });
             let count = ui.fonts(|f| {
-                f.layout_no_wrap(fmt_count(tab.count(&self.counts)), FontId::monospace(11.0), if on { t.ac } else { t.mu })
+                f.layout_no_wrap(
+                    fmt_count(tab.count(&self.counts)),
+                    FontId::monospace(11.0),
+                    if on { t.ac } else { t.mu },
+                )
             });
             let w = 16.0 + label.size().x + 6.0 + count.size().x;
             let r = Rect::from_min_size(Pos2::new(x, rect.top()), Vec2::new(w, rect.height()));
             let resp = ui.interact(r, ui.id().with(tab.label()), Sense::click());
             let p = ui.painter();
-            p.galley(Pos2::new(x + 8.0, r.center().y - label.size().y / 2.0), label.clone(), t.tx);
-            p.galley(Pos2::new(x + 14.0 + label.size().x, r.center().y - count.size().y / 2.0), count, t.mu);
+            p.galley(
+                Pos2::new(x + 8.0, r.center().y - label.size().y / 2.0),
+                label.clone(),
+                t.tx,
+            );
+            p.galley(
+                Pos2::new(
+                    x + 14.0 + label.size().x,
+                    r.center().y - count.size().y / 2.0,
+                ),
+                count,
+                t.mu,
+            );
             if on {
-                p.rect_filled(Rect::from_min_max(Pos2::new(r.left(), r.bottom() - 2.0), r.max), 0.0, t.ac);
+                p.rect_filled(
+                    Rect::from_min_max(Pos2::new(r.left(), r.bottom() - 2.0), r.max),
+                    0.0,
+                    t.ac,
+                );
             }
             if resp.clicked() {
                 clicked = Some(tab);
@@ -564,11 +659,29 @@ impl App {
         let right = Pos2::new(rect.right() - 16.0, rect.center().y);
         let p = ui.painter();
         if matches!(self.tab, Tab::Recent | Tab::Large) {
-            p.text(right, Align2::RIGHT_CENTER, self.tab.sort_label(), FontId::proportional(11.5), t.mu);
+            p.text(
+                right,
+                Align2::RIGHT_CENTER,
+                self.tab.sort_label(),
+                FontId::proportional(11.5),
+                t.mu,
+            );
         } else {
-            let g = p.text(right, Align2::RIGHT_CENTER, "⇥", FontId::monospace(10.5), t.mu);
+            let g = p.text(
+                right,
+                Align2::RIGHT_CENTER,
+                "⇥",
+                FontId::monospace(10.5),
+                t.mu,
+            );
             p.rect_stroke(g.expand2(Vec2::new(5.0, 2.0)), 4.0, st(1.0, t.line));
-            p.text(Pos2::new(g.left() - 12.0, right.y), Align2::RIGHT_CENTER, self.tab.sort_label(), FontId::proportional(11.5), t.mu);
+            p.text(
+                Pos2::new(g.left() - 12.0, right.y),
+                Align2::RIGHT_CENTER,
+                self.tab.sort_label(),
+                FontId::proportional(11.5),
+                t.mu,
+            );
         }
         if let Some(tab) = clicked {
             self.set_tab(tab);
@@ -582,13 +695,25 @@ impl App {
             area = area.vertical_scroll_offset(off);
         }
         let large = self.tab == Tab::Large;
-        let max = if large { self.hits.iter().map(|h| h.size).max().unwrap_or(0) } else { 0 };
+        let max = if large {
+            self.hits.iter().map(|h| h.size).max().unwrap_or(0)
+        } else {
+            0
+        };
         let mut clicked = None;
         let out = area.show_rows(ui, ROW_H, self.hits.len(), |ui, range| {
             ui.spacing_mut().item_spacing.y = 0.0;
             for i in range {
-                let (rect, resp) = ui.allocate_exact_size(Vec2::new(ui.available_width(), ROW_H), Sense::click());
-                self.paint_row(ui, t, rect.shrink2(Vec2::new(8.0, 0.0)), i, resp.hovered(), large.then_some(max));
+                let (rect, resp) =
+                    ui.allocate_exact_size(Vec2::new(ui.available_width(), ROW_H), Sense::click());
+                self.paint_row(
+                    ui,
+                    t,
+                    rect.shrink2(Vec2::new(8.0, 0.0)),
+                    i,
+                    resp.hovered(),
+                    large.then_some(max),
+                );
                 if resp.clicked() || resp.double_clicked() {
                     clicked = Some((i, resp.double_clicked()));
                 }
@@ -622,8 +747,16 @@ impl App {
         section(ui, "RECENT", 12.0);
         let mut clicked = None;
         for i in 0..self.hits.len() {
-            let (rect, resp) = ui.allocate_exact_size(Vec2::new(ui.available_width(), ROW_H), Sense::click());
-            self.paint_row(ui, t, rect.shrink2(Vec2::new(8.0, 0.0)), i, resp.hovered(), None);
+            let (rect, resp) =
+                ui.allocate_exact_size(Vec2::new(ui.available_width(), ROW_H), Sense::click());
+            self.paint_row(
+                ui,
+                t,
+                rect.shrink2(Vec2::new(8.0, 0.0)),
+                i,
+                resp.hovered(),
+                None,
+            );
             if resp.clicked() || resp.double_clicked() {
                 clicked = Some((i, resp.double_clicked()));
             }
@@ -631,25 +764,54 @@ impl App {
         if self.hits.is_empty() {
             ui.horizontal(|ui| {
                 ui.add_space(18.0);
-                ui.label(egui::RichText::new("Nothing changed in the last 7 days.").size(12.5).color(t.fa));
+                ui.label(
+                    egui::RichText::new("Nothing changed in the last 7 days.")
+                        .size(12.5)
+                        .color(t.fa),
+                );
             });
         }
         self.handle_click(clicked);
 
         section(ui, "TRY", 16.0);
-        let row = ui.allocate_exact_size(Vec2::new(ui.available_width(), 52.0), Sense::hover()).0.shrink2(Vec2::new(18.0, 0.0));
+        let row = ui
+            .allocate_exact_size(Vec2::new(ui.available_width(), 52.0), Sense::hover())
+            .0
+            .shrink2(Vec2::new(18.0, 0.0));
         let w = (row.width() - 16.0) / 3.0;
         for (i, (q, d)) in TRIES.iter().enumerate() {
-            let r = Rect::from_min_size(Pos2::new(row.left() + i as f32 * (w + 8.0), row.top()), Vec2::new(w, row.height()));
+            let r = Rect::from_min_size(
+                Pos2::new(row.left() + i as f32 * (w + 8.0), row.top()),
+                Vec2::new(w, row.height()),
+            );
             let resp = ui.interact(r, ui.id().with(("try", i)), Sense::click());
             let focus = self.try_focus == Some(i);
             let p = ui.painter();
             if resp.hovered() {
                 p.rect_filled(r, 7.0, t.hl);
             }
-            p.rect_stroke(r, 7.0, st(if focus { 2.0 } else { 1.0 }, if focus { t.ac } else { t.line }));
-            p.text(r.min + Vec2::new(12.0, 16.0), Align2::LEFT_CENTER, *q, FontId::monospace(12.5), t.tx);
-            p.text(r.min + Vec2::new(12.0, 35.0), Align2::LEFT_CENTER, *d, FontId::proportional(12.0), t.mu);
+            p.rect_stroke(
+                r,
+                7.0,
+                st(
+                    if focus { 2.0 } else { 1.0 },
+                    if focus { t.ac } else { t.line },
+                ),
+            );
+            p.text(
+                r.min + Vec2::new(12.0, 16.0),
+                Align2::LEFT_CENTER,
+                *q,
+                FontId::monospace(12.5),
+                t.tx,
+            );
+            p.text(
+                r.min + Vec2::new(12.0, 35.0),
+                Align2::LEFT_CENTER,
+                *d,
+                FontId::proportional(12.0),
+                t.mu,
+            );
             if resp.clicked() {
                 self.set_query(q);
             }
@@ -660,15 +822,27 @@ impl App {
     fn no_results(&mut self, ui: &mut egui::Ui, t: &Theme) {
         ui.add_space(28.0);
         ui.vertical_centered(|ui| {
-            ui.label(egui::RichText::new(format!("No matches for {}", self.query.trim())).size(15.0).strong().color(t.tx));
+            ui.label(
+                egui::RichText::new(format!("No matches for {}", self.query.trim()))
+                    .size(15.0)
+                    .strong()
+                    .color(t.tx),
+            );
             ui.add_space(6.0);
-            ui.label(egui::RichText::new("Check the spelling, or narrow the search with filters.").size(13.0).color(t.mu));
+            ui.label(
+                egui::RichText::new("Check the spelling, or narrow the search with filters.")
+                    .size(13.0)
+                    .color(t.mu),
+            );
         });
         ui.add_space(16.0);
         let box_w = 420.0;
         let left = ui.max_rect().center().x - box_w / 2.0;
         let top = ui.cursor().top();
-        let rect = Rect::from_min_size(Pos2::new(left, top), Vec2::new(box_w, SYNTAX.len() as f32 * 30.0));
+        let rect = Rect::from_min_size(
+            Pos2::new(left, top),
+            Vec2::new(box_w, SYNTAX.len() as f32 * 30.0),
+        );
         ui.allocate_rect(rect, Sense::hover());
         let p = ui.painter();
         p.rect_stroke(rect, 7.0, st(1.0, t.line));
@@ -677,8 +851,20 @@ impl App {
             if i > 0 {
                 p.hline(rect.x_range(), y, st(1.0, t.line));
             }
-            p.text(Pos2::new(rect.left() + 14.0, y + 15.0), Align2::LEFT_CENTER, *code, FontId::monospace(12.0), t.tx);
-            p.text(Pos2::new(rect.left() + 170.0, y + 15.0), Align2::LEFT_CENTER, *what, FontId::proportional(12.5), t.mu);
+            p.text(
+                Pos2::new(rect.left() + 14.0, y + 15.0),
+                Align2::LEFT_CENTER,
+                *code,
+                FontId::monospace(12.0),
+                t.tx,
+            );
+            p.text(
+                Pos2::new(rect.left() + 170.0, y + 15.0),
+                Align2::LEFT_CENTER,
+                *what,
+                FontId::proportional(12.5),
+                t.mu,
+            );
         }
     }
 
@@ -716,7 +902,15 @@ impl App {
         });
     }
 
-    fn paint_row(&self, ui: &egui::Ui, t: &Theme, rect: Rect, i: usize, hovered: bool, large_max: Option<u64>) {
+    fn paint_row(
+        &self,
+        ui: &egui::Ui,
+        t: &Theme,
+        rect: Rect,
+        i: usize,
+        hovered: bool,
+        large_max: Option<u64>,
+    ) {
         let hit = &self.hits[i];
         let p = ui.painter();
         let selected = i == self.selected && self.try_focus.is_none();
@@ -729,28 +923,56 @@ impl App {
         let (parent, name) = hit.path.rsplit_once('/').unwrap_or(("", &hit.path));
 
         // type badge / folder glyph
-        let icon = Rect::from_min_size(rect.left_center() + Vec2::new(10.0, -10.0), Vec2::splat(20.0));
+        let icon = Rect::from_min_size(
+            rect.left_center() + Vec2::new(10.0, -10.0),
+            Vec2::splat(20.0),
+        );
         if hit.kind == Kind::Dir {
-            p.rect_filled(Rect::from_min_size(icon.min + Vec2::new(1.0, 3.0), Vec2::new(8.0, 4.0)), 2.0, t.fa);
-            p.rect_filled(Rect::from_min_size(icon.min + Vec2::new(1.0, 5.0), Vec2::new(18.0, 12.0)), 2.0, t.fa);
+            p.rect_filled(
+                Rect::from_min_size(icon.min + Vec2::new(1.0, 3.0), Vec2::new(8.0, 4.0)),
+                2.0,
+                t.fa,
+            );
+            p.rect_filled(
+                Rect::from_min_size(icon.min + Vec2::new(1.0, 5.0), Vec2::new(18.0, 12.0)),
+                2.0,
+                t.fa,
+            );
         } else {
             p.rect(icon, Rounding::same(4.0), t.sub, st(1.0, t.line));
-            let ext = name.rsplit_once('.').map_or(String::new(), |(_, e)| e.chars().take(4).collect::<String>().to_uppercase());
+            let ext = name.rsplit_once('.').map_or(String::new(), |(_, e)| {
+                e.chars().take(4).collect::<String>().to_uppercase()
+            });
             p.text(icon.center(), Align2::CENTER_CENTER, ext, mono(7.0), t.mu);
         }
 
         // right columns: date (84), size (72 or 64 + 96 bar)
         let right = rect.right() - 10.0;
         let cy = rect.center().y;
-        p.text(Pos2::new(right, cy), Align2::RIGHT_CENTER, fmt_date(hit.mtime), mono(11.5), t.mu);
+        p.text(
+            Pos2::new(right, cy),
+            Align2::RIGHT_CENTER,
+            fmt_date(hit.mtime),
+            mono(11.5),
+            t.mu,
+        );
         let size_right = right - 84.0 - 12.0;
         if hit.kind != Kind::Dir {
             let c = if large_max.is_some() { t.tx } else { t.mu };
-            p.text(Pos2::new(size_right, cy), Align2::RIGHT_CENTER, fmt_size(hit.size), mono(11.5), c);
+            p.text(
+                Pos2::new(size_right, cy),
+                Align2::RIGHT_CENTER,
+                fmt_size(hit.size),
+                mono(11.5),
+                c,
+            );
         }
         let mut cols_left = size_right - 72.0;
         if let Some(max) = large_max {
-            let track = Rect::from_min_size(Pos2::new(size_right - 64.0 - 12.0 - 96.0, cy - 2.0), Vec2::new(96.0, 4.0));
+            let track = Rect::from_min_size(
+                Pos2::new(size_right - 64.0 - 12.0 - 96.0, cy - 2.0),
+                Vec2::new(96.0, 4.0),
+            );
             p.rect(track, 2.0, t.sub, st(1.0, t.line));
             let mut fill = track;
             fill.set_width(96.0 * bar_ratio(hit.size, max));
@@ -781,36 +1003,64 @@ impl App {
 
     fn footer(&self, ui: &mut egui::Ui, t: &Theme, rect: Rect) {
         let p = ui.painter();
-        p.rect_filled(rect, Rounding { nw: 0.0, ne: 0.0, sw: 12.0, se: 12.0 }, t.sub);
+        p.rect_filled(
+            rect,
+            Rounding {
+                nw: 0.0,
+                ne: 0.0,
+                sw: 12.0,
+                se: 12.0,
+            },
+            t.sub,
+        );
         p.hline(rect.x_range(), rect.top(), st(1.0, t.line));
         let inner = rect.shrink2(Vec2::new(14.0, 0.0));
-        ui.allocate_new_ui(UiBuilder::new().max_rect(inner).layout(egui::Layout::left_to_right(egui::Align::Center)), |ui| {
-            let small = |s: String, c: Color32| egui::RichText::new(s).size(11.5).color(c);
-            let view = self.view();
-            if let Some(e) = &self.error {
-                ui.label(small(e.clone(), t.ac));
-            } else if view == View::Results || view == View::NoResults {
-                let st = self.status.lock().unwrap().clone();
-                let snap_files = self.snap.get().and_then(|o| o.as_ref()).map(|i| i.len());
-                // A fresh daemon reply wins; otherwise trust the last search's source.
-                let live = st.is_some() && (self.live || snap_files.is_none());
-                if let Some(s) = status_text(self.total, self.took_us, st.as_ref().filter(|_| live), snap_files) {
-                    ui.label(egui::RichText::new(s).font(FontId::monospace(11.0)).color(t.mu));
+        ui.allocate_new_ui(
+            UiBuilder::new()
+                .max_rect(inner)
+                .layout(egui::Layout::left_to_right(egui::Align::Center)),
+            |ui| {
+                let small = |s: String, c: Color32| egui::RichText::new(s).size(11.5).color(c);
+                let view = self.view();
+                if let Some(e) = &self.error {
+                    ui.label(small(e.clone(), t.ac));
+                } else if view == View::Results || view == View::NoResults {
+                    let st = self.status.lock().unwrap().clone();
+                    let snap_files = self.snap.get().and_then(|o| o.as_ref()).map(|i| i.len());
+                    // A fresh daemon reply wins; otherwise trust the last search's source.
+                    let live = st.is_some() && (self.live || snap_files.is_none());
+                    if let Some(s) = status_text(
+                        self.total,
+                        self.took_us,
+                        st.as_ref().filter(|_| live),
+                        snap_files,
+                    ) {
+                        ui.label(
+                            egui::RichText::new(s)
+                                .font(FontId::monospace(11.0))
+                                .color(t.mu),
+                        );
+                    }
                 }
-            }
-            let hints: &[(&str, &str)] = match view {
-                View::Fda => &[("↵", "Open System Settings"), ("esc", "Skip")],
-                View::Empty => &[("↑↓", "Select"), ("↵", "Open"), ("⇥", "Examples")],
-                _ => &[("↵", "Open"), ("⌘↵", "Reveal"), ("⌘Y", "Quick Look"), ("⌘C", "Copy path")],
-            };
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                for (k, what) in hints.iter().rev() {
-                    ui.label(small((*what).into(), t.mu));
-                    keycap(ui, t, k);
-                    ui.add_space(8.0);
-                }
-            });
-        });
+                let hints: &[(&str, &str)] = match view {
+                    View::Fda => &[("↵", "Open System Settings"), ("esc", "Skip")],
+                    View::Empty => &[("↑↓", "Select"), ("↵", "Open"), ("⇥", "Examples")],
+                    _ => &[
+                        ("↵", "Open"),
+                        ("⌘↵", "Reveal"),
+                        ("⌘Y", "Quick Look"),
+                        ("⌘C", "Copy path"),
+                    ],
+                };
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    for (k, what) in hints.iter().rev() {
+                        ui.label(small((*what).into(), t.mu));
+                        keycap(ui, t, k);
+                        ui.add_space(8.0);
+                    }
+                });
+            },
+        );
     }
 
     /// Screen 07, its own native window.
@@ -831,7 +1081,9 @@ impl App {
     }
 
     fn save_cfg(&mut self) {
-        self.settings_msg = config::save(&self.cfg).err().map(|e| format!("Couldn't save config.toml: {e}"));
+        self.settings_msg = config::save(&self.cfg)
+            .err()
+            .map(|e| format!("Couldn't save config.toml: {e}"));
     }
 
     fn settings_ui(&mut self, ui: &mut egui::Ui, t: &Theme) {
@@ -847,8 +1099,17 @@ impl App {
         if self.recording {
             let got = ui.input(|i| {
                 i.events.iter().find_map(|e| match e {
-                    egui::Event::Key { key: Key::Escape, pressed: true, .. } => Some(None),
-                    egui::Event::Key { key, pressed: true, modifiers, .. } => config::hotkey_from_egui(*modifiers, *key).map(Some),
+                    egui::Event::Key {
+                        key: Key::Escape,
+                        pressed: true,
+                        ..
+                    } => Some(None),
+                    egui::Event::Key {
+                        key,
+                        pressed: true,
+                        modifiers,
+                        ..
+                    } => config::hotkey_from_egui(*modifiers, *key).map(Some),
                     _ => None,
                 })
             });
@@ -866,52 +1127,101 @@ impl App {
                 }
             }
         }
-        let label = if self.recording { "Type new shortcut…".to_string() } else { config::hotkey_glyphs(&self.cfg.hotkey) };
-        let b = egui::Button::new(egui::RichText::new(label).font(FontId::monospace(13.0)).color(t.tx))
-            .fill(t.sub)
-            .stroke(st(if self.recording { 2.0 } else { 1.0 }, if self.recording { t.ac } else { t.line }))
-            .min_size(Vec2::new(180.0, 28.0));
+        let label = if self.recording {
+            "Type new shortcut…".to_string()
+        } else {
+            config::hotkey_glyphs(&self.cfg.hotkey)
+        };
+        let b = egui::Button::new(
+            egui::RichText::new(label)
+                .font(FontId::monospace(13.0))
+                .color(t.tx),
+        )
+        .fill(t.sub)
+        .stroke(st(
+            if self.recording { 2.0 } else { 1.0 },
+            if self.recording { t.ac } else { t.line },
+        ))
+        .min_size(Vec2::new(180.0, 28.0));
         if ui.add(b).clicked() {
             self.recording = !self.recording;
         }
         ui.add_space(18.0);
 
-        heading(ui, "Excluded folders", "Ferret won’t index these paths. Globs allowed. (Read by ferretd in a later version.)");
+        heading(
+            ui,
+            "Excluded folders",
+            "Ferret won’t index these paths. Globs allowed. (Read by ferretd in a later version.)",
+        );
         let mut changed = false;
-        egui::Frame::none().stroke(st(1.0, t.line)).rounding(7.0).inner_margin(6.0).show(ui, |ui| {
-            ui.set_width(ui.available_width());
-            egui::ScrollArea::vertical().max_height(90.0).auto_shrink([false, true]).show(ui, |ui| {
-                for (i, p) in self.cfg.excluded.iter().enumerate() {
-                    let on = self.excluded_sel == Some(i);
-                    if ui.selectable_label(on, egui::RichText::new(p).font(FontId::monospace(12.0))).clicked() {
-                        self.excluded_sel = Some(i);
-                    }
-                }
-            });
-            ui.horizontal(|ui| {
-                let add = ui.add(egui::TextEdit::singleline(&mut self.new_excluded).hint_text("~/path or glob").desired_width(300.0));
-                let enter = add.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter));
-                if (ui.button("+").clicked() || enter) && !self.new_excluded.trim().is_empty() {
-                    self.cfg.excluded.push(self.new_excluded.trim().to_string());
-                    self.new_excluded.clear();
-                    changed = true;
-                }
-                if ui.add_enabled(self.excluded_sel.is_some(), egui::Button::new("−")).clicked() {
-                    if let Some(i) = self.excluded_sel.take().filter(|i| *i < self.cfg.excluded.len()) {
-                        self.cfg.excluded.remove(i);
+        egui::Frame::none()
+            .stroke(st(1.0, t.line))
+            .rounding(7.0)
+            .inner_margin(6.0)
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                egui::ScrollArea::vertical()
+                    .max_height(90.0)
+                    .auto_shrink([false, true])
+                    .show(ui, |ui| {
+                        for (i, p) in self.cfg.excluded.iter().enumerate() {
+                            let on = self.excluded_sel == Some(i);
+                            if ui
+                                .selectable_label(
+                                    on,
+                                    egui::RichText::new(p).font(FontId::monospace(12.0)),
+                                )
+                                .clicked()
+                            {
+                                self.excluded_sel = Some(i);
+                            }
+                        }
+                    });
+                ui.horizontal(|ui| {
+                    let add = ui.add(
+                        egui::TextEdit::singleline(&mut self.new_excluded)
+                            .hint_text("~/path or glob")
+                            .desired_width(300.0),
+                    );
+                    let enter = add.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter));
+                    if (ui.button("+").clicked() || enter) && !self.new_excluded.trim().is_empty() {
+                        self.cfg.excluded.push(self.new_excluded.trim().to_string());
+                        self.new_excluded.clear();
                         changed = true;
                     }
-                }
+                    if ui
+                        .add_enabled(self.excluded_sel.is_some(), egui::Button::new("−"))
+                        .clicked()
+                    {
+                        if let Some(i) = self
+                            .excluded_sel
+                            .take()
+                            .filter(|i| *i < self.cfg.excluded.len())
+                        {
+                            self.cfg.excluded.remove(i);
+                            changed = true;
+                        }
+                    }
+                });
             });
-        });
         ui.add_space(18.0);
 
-        if ui.checkbox(&mut self.cfg.external_drives, "Index external drives").changed() {
+        if ui
+            .checkbox(&mut self.cfg.external_drives, "Index external drives")
+            .changed()
+        {
             changed = true;
         }
-        ui.label(egui::RichText::new("Includes volumes mounted under /Volumes.").size(12.0).color(t.mu));
+        ui.label(
+            egui::RichText::new("Includes volumes mounted under /Volumes.")
+                .size(12.0)
+                .color(t.mu),
+        );
         ui.add_space(10.0);
-        if ui.checkbox(&mut self.cfg.launch_at_login, "Launch at login").changed() {
+        if ui
+            .checkbox(&mut self.cfg.launch_at_login, "Launch at login")
+            .changed()
+        {
             match config::set_launch_at_login(self.cfg.launch_at_login) {
                 Ok(()) => changed = true,
                 Err(e) => {
@@ -922,11 +1232,24 @@ impl App {
         }
         ui.add_space(18.0);
 
-        heading(ui, "AI agents (MCP)", "Let Claude Code and other MCP clients query your index. Run once in a terminal:");
+        heading(
+            ui,
+            "AI agents (MCP)",
+            "Let Claude Code and other MCP clients query your index. Run once in a terminal:",
+        );
         ui.horizontal(|ui| {
-            egui::Frame::none().fill(t.sub).stroke(st(1.0, t.line)).rounding(6.0).inner_margin(8.0).show(ui, |ui| {
-                ui.label(egui::RichText::new(MCP_LINE).font(FontId::monospace(12.0)).color(t.tx));
-            });
+            egui::Frame::none()
+                .fill(t.sub)
+                .stroke(st(1.0, t.line))
+                .rounding(6.0)
+                .inner_margin(8.0)
+                .show(ui, |ui| {
+                    ui.label(
+                        egui::RichText::new(MCP_LINE)
+                            .font(FontId::monospace(12.0))
+                            .color(t.tx),
+                    );
+                });
             if ui.button("Copy").clicked() {
                 ui.output_mut(|o| o.copied_text = MCP_LINE.into());
             }
@@ -943,10 +1266,23 @@ impl App {
 }
 
 /// Daemon if reachable, else the snapshot. `kind` is applied locally the way ferretd does it.
-fn fetch(q: &str, parsed: &Query, kind: KindFilter, sort: SortArg, limit: usize, snap: &Snap) -> Result<(SearchResult, bool), String> {
-    let op = Op::Search { q: q.to_string(), limit, sort, kind };
+fn fetch(
+    q: &str,
+    parsed: &Query,
+    kind: KindFilter,
+    sort: SortArg,
+    limit: usize,
+    snap: &Snap,
+) -> Result<(SearchResult, bool), String> {
+    let op = Op::Search {
+        q: q.to_string(),
+        limit,
+        sort,
+        kind,
+    };
     choose(protocol::request(op), || {
-        let Some(index) = snap.get_or_init(|| snapshot::load(&snapshot::default_path()).ok()) else {
+        let Some(index) = snap.get_or_init(|| snapshot::load(&snapshot::default_path()).ok())
+        else {
             return Err("No index yet — run `ff index` or start ferretd".into());
         };
         let mut p = parsed.clone();
@@ -971,13 +1307,23 @@ fn keycap(ui: &mut egui::Ui, t: &Theme, k: &str) {
         .stroke(st(1.0_f32, t.line))
         .rounding(4.0)
         .inner_margin(egui::Margin::symmetric(5.0, 1.0))
-        .show(ui, |ui| ui.label(egui::RichText::new(k).font(FontId::monospace(10.5)).color(t.mu)));
+        .show(ui, |ui| {
+            ui.label(
+                egui::RichText::new(k)
+                    .font(FontId::monospace(10.5))
+                    .color(t.mu),
+            )
+        });
 }
 
 /// Name with query words in accent color (same rules as the mockup's `seg`).
 fn highlight(name: &str, words: &[String], t: &Theme) -> LayoutJob {
     let font = FontId::proportional(13.0);
-    let fmt = |c| TextFormat { font_id: font.clone(), color: c, ..Default::default() };
+    let fmt = |c| TextFormat {
+        font_id: font.clone(),
+        color: c,
+        ..Default::default()
+    };
     let lower = name.to_lowercase();
     let mut ranges: Vec<(usize, usize)> = Vec::new();
     // shortcut: byte offsets only line up when lowercasing keeps lengths; otherwise no highlight.
@@ -1032,26 +1378,52 @@ fn choose(
 
 /// [all, files, folders] from per-kind match counts, honouring a `type:` the user typed.
 fn tab_counts(by_kind: [usize; 3], typed: Option<Kind>) -> Counts {
-    let k = |kind: Kind| if typed.is_none_or(|t| t == kind) { by_kind[kind as usize] } else { 0 };
+    let k = |kind: Kind| {
+        if typed.is_none_or(|t| t == kind) {
+            by_kind[kind as usize]
+        } else {
+            0
+        }
+    };
     let (f, d, s) = (k(Kind::File), k(Kind::Dir), k(Kind::Symlink));
     [f + d + s, f, d]
 }
 
 fn hit_from(h: HitOut) -> Hit {
-    Hit { node: 0, path: h.path, kind: h.kind, size: h.size, mtime: h.mtime, score: 0 }
+    Hit {
+        node: 0,
+        path: h.path,
+        kind: h.kind,
+        size: h.size,
+        mtime: h.mtime,
+        score: 0,
+    }
 }
 
 /// `live` = daemon status when the shown results are from the daemon; else snapshot file count.
-fn status_text(total: usize, took_us: u64, live: Option<&Status>, snap_files: Option<usize>) -> Option<String> {
+fn status_text(
+    total: usize,
+    took_us: u64,
+    live: Option<&Status>,
+    snap_files: Option<usize>,
+) -> Option<String> {
     let (files, src) = match (live, snap_files) {
         (Some(s), _) if s.indexing => {
-            return Some(format!("{total} matches so far · {} · {} indexed", fmt_ms(took_us), fmt_commas(s.files)))
+            return Some(format!(
+                "{total} matches so far · {} · {} indexed",
+                fmt_ms(took_us),
+                fmt_commas(s.files)
+            ))
         }
         (Some(s), _) => (s.files as usize, "live"),
         (None, Some(n)) => (n, "snapshot"),
         (None, None) => return None,
     };
-    Some(format!("{total} matches · {} · {} files · {src}", fmt_ms(took_us), fmt_count(files)))
+    Some(format!(
+        "{total} matches · {} · {} files · {src}",
+        fmt_ms(took_us),
+        fmt_count(files)
+    ))
 }
 
 fn fmt_ms(us: u64) -> String {
@@ -1116,8 +1488,12 @@ fn local(secs: i64) -> libc::tm {
 
 /// "Today 09:12", "Mar 11" (this year), "2024" (older).
 fn fmt_date(mtime: i64) -> String {
-    const M: [&str; 12] = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-    let now = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64);
+    const M: [&str; 12] = [
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    ];
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs() as i64);
     let (n, d) = (local(now), local(mtime));
     if d.tm_year != n.tm_year {
         format!("{}", d.tm_year + 1900)
@@ -1147,19 +1523,31 @@ mod tests {
         assert_eq!(fmt_commas(12), "12");
         assert_eq!(fmt_commas(1_000_000), "1,000,000");
         assert_eq!(fmt_date(0).len(), 4); // old file -> just the year
-        let j = highlight("Invoice-2025.pdf", &["invoice".into(), "2025".into()], &theme::L);
+        let j = highlight(
+            "Invoice-2025.pdf",
+            &["invoice".into(), "2025".into()],
+            &theme::L,
+        );
         assert_eq!(j.sections.len(), 4);
         assert_eq!(j.sections[0].format.color, theme::L.ac);
     }
 
     fn out() -> HitOut {
-        HitOut { path: "/a/b.txt".into(), kind: Kind::File, size: 5, mtime: 9 }
+        HitOut {
+            path: "/a/b.txt".into(),
+            kind: Kind::File,
+            size: 5,
+            mtime: 9,
+        }
     }
 
     #[test]
     fn maps_hitout() {
         let h = hit_from(out());
-        assert_eq!((h.path.as_str(), h.kind, h.size, h.mtime), ("/a/b.txt", Kind::File, 5, 9));
+        assert_eq!(
+            (h.path.as_str(), h.kind, h.size, h.mtime),
+            ("/a/b.txt", Kind::File, 5, 9)
+        );
     }
 
     #[test]
@@ -1172,18 +1560,46 @@ mod tests {
 
     #[test]
     fn status_lines() {
-        let s = Status { files: 2_100_000, ..Default::default() };
-        assert_eq!(status_text(7, 3_400, Some(&s), None).unwrap(), "7 matches · 3.4 ms · 2.1M files · live");
-        assert_eq!(status_text(7, 25_000, None, Some(2_100_000)).unwrap(), "7 matches · 25 ms · 2.1M files · snapshot");
-        let idx = Status { files: 840_213, indexing: true, ..Default::default() };
-        assert_eq!(status_text(41, 3_000, Some(&idx), None).unwrap(), "41 matches so far · 3.0 ms · 840,213 indexed");
+        let s = Status {
+            files: 2_100_000,
+            ..Default::default()
+        };
+        assert_eq!(
+            status_text(7, 3_400, Some(&s), None).unwrap(),
+            "7 matches · 3.4 ms · 2.1M files · live"
+        );
+        assert_eq!(
+            status_text(7, 25_000, None, Some(2_100_000)).unwrap(),
+            "7 matches · 25 ms · 2.1M files · snapshot"
+        );
+        let idx = Status {
+            files: 840_213,
+            indexing: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            status_text(41, 3_000, Some(&idx), None).unwrap(),
+            "41 matches so far · 3.0 ms · 840,213 indexed"
+        );
         assert_eq!(status_text(0, 0, None, None), None);
     }
 
     #[test]
     fn daemon_vs_fallback() {
-        let fb = || Ok(SearchResult { hits: Vec::new(), total: 42, took_us: 1, ..Default::default() });
-        let ok = Response { total: 1, took_us: 5, hits: vec![out()], ..Default::default() };
+        let fb = || {
+            Ok(SearchResult {
+                hits: Vec::new(),
+                total: 42,
+                took_us: 1,
+                ..Default::default()
+            })
+        };
+        let ok = Response {
+            total: 1,
+            took_us: 5,
+            hits: vec![out()],
+            ..Default::default()
+        };
         let (r, live) = choose(Ok(ok), || panic!("fallback must not run")).unwrap();
         assert!(live);
         assert_eq!((r.total, r.hits.len()), (1, 1));
@@ -1191,7 +1607,10 @@ mod tests {
         let (r, live) = choose(Err(down), fb).unwrap();
         assert!(!live);
         assert_eq!(r.total, 42);
-        let bad = Response { error: Some("bad query".into()), ..Default::default() };
+        let bad = Response {
+            error: Some("bad query".into()),
+            ..Default::default()
+        };
         assert_eq!(choose(Ok(bad), fb).unwrap_err(), "bad query");
     }
 
@@ -1207,13 +1626,27 @@ mod tests {
             (Tab::Large, K::File, S::Size),
         ];
         for (tab, kind, sort) in cases {
-            assert_eq!(plan(tab, "invoice"), ("invoice".into(), kind, sort, LIMIT), "{tab:?}");
+            assert_eq!(
+                plan(tab, "invoice"),
+                ("invoice".into(), kind, sort, LIMIT),
+                "{tab:?}"
+            );
             // no query: always the recent-files list, whatever the tab
-            assert_eq!(plan(tab, "  "), ("mod:<7d".into(), K::File, S::Mtime, RECENT_LIMIT));
+            assert_eq!(
+                plan(tab, "  "),
+                ("mod:<7d".into(), K::File, S::Mtime, RECENT_LIMIT)
+            );
         }
         assert!(ferret_core::parse("mod:<7d").is_ok());
         let c = [10, 7, 3];
-        assert_eq!((Tab::Recent.count(&c), Tab::Large.count(&c), Tab::Folders.count(&c)), (10, 7, 3));
+        assert_eq!(
+            (
+                Tab::Recent.count(&c),
+                Tab::Large.count(&c),
+                Tab::Folders.count(&c)
+            ),
+            (10, 7, 3)
+        );
         assert_eq!(Tab::Large.sort_label(), "Size ↓");
     }
 

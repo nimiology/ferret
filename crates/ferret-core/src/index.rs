@@ -76,7 +76,11 @@ impl Index {
 
     /// Live direct children of `dir`.
     pub fn children(&self, dir: u32) -> impl Iterator<Item = u32> + '_ {
-        let mut c = self.first_child.get(dir as usize).copied().unwrap_or(NO_PARENT);
+        let mut c = self
+            .first_child
+            .get(dir as usize)
+            .copied()
+            .unwrap_or(NO_PARENT);
         std::iter::from_fn(move || {
             while c != NO_PARENT {
                 let i = c;
@@ -98,7 +102,9 @@ impl Index {
         let rel = path.strip_prefix(self.name(0)).ok()?;
         let mut cur = 0u32;
         for comp in rel.components() {
-            let std::path::Component::Normal(c) = comp else { return None };
+            let std::path::Component::Normal(c) = comp else {
+                return None;
+            };
             let c: String = c.to_string_lossy().nfc().collect();
             cur = self.children(cur).find(|&i| self.name(i) == c)?;
         }
@@ -128,7 +134,11 @@ impl Index {
                 continue;
             }
             // Parents always have lower ids than children (append-only), so remap is already filled.
-            let parent = if n.parent == NO_PARENT { NO_PARENT } else { remap[n.parent as usize] };
+            let parent = if n.parent == NO_PARENT {
+                NO_PARENT
+            } else {
+                remap[n.parent as usize]
+            };
             let id = out.push(parent, self.name(i as u32), n.kind, n.size, n.mtime);
             out.nodes[id as usize].flags = n.flags;
             remap[i] = id;
@@ -166,12 +176,17 @@ impl Index {
             name_off: self.names.len() as u32,
             name_len: name.len() as u16,
             kind,
-            flags: if name.starts_with('.') { FLAG_HIDDEN } else { 0 },
+            flags: if name.starts_with('.') {
+                FLAG_HIDDEN
+            } else {
+                0
+            },
             size,
             mtime,
         });
         self.names.extend_from_slice(name.as_bytes());
-        self.lower_spans.push((self.names_lower.len() as u32, lower.len() as u16));
+        self.lower_spans
+            .push((self.names_lower.len() as u32, lower.len() as u16));
         self.names_lower.extend_from_slice(lower.as_bytes());
         id
     }

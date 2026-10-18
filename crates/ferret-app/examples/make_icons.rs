@@ -11,10 +11,18 @@ fn main() {
     std::fs::create_dir_all(&set).unwrap();
     for pt in [16, 32, 128, 256, 512] {
         for scale in [1, 2] {
-            let name = if scale == 1 { format!("icon_{pt}x{pt}.png") } else { format!("icon_{pt}x{pt}@2x.png") };
-            icon::render(pt * scale, false).save_png(set.join(name)).unwrap();
+            let name = if scale == 1 {
+                format!("icon_{pt}x{pt}.png")
+            } else {
+                format!("icon_{pt}x{pt}@2x.png")
+            };
+            icon::render(pt * scale, false)
+                .save_png(set.join(name))
+                .unwrap();
         }
     }
-    icon::render(32, true).save_png(dir.join("tray@2x.png")).unwrap();
+    icon::render(32, true)
+        .save_png(dir.join("tray@2x.png"))
+        .unwrap();
     println!("wrote {}", set.display());
 }

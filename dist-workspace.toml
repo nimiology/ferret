@@ -6,9 +6,10 @@ members = ["cargo:."]
 cargo-dist-version = "0.32.0"
 ci = "github"
 installers = ["shell", "homebrew"]
-# TODO: GitHub owner unknown. Create OWNER/homebrew-ferret and set HOMEBREW_TAP_TOKEN in repo secrets.
-tap = "OWNER/homebrew-ferret"
+tap = "nimiology/homebrew-ferret"
 publish-jobs = ["homebrew"]
 targets = ["aarch64-apple-darwin", "x86_64-apple-darwin"]
 install-path = "CARGO_HOME"
 install-updater = false
+# Menu bar app .dmg, attached to the same GitHub Release.
+global-artifacts-jobs = ["./build-dmg"]

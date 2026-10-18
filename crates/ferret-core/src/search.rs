@@ -37,13 +37,22 @@ pub struct SearchResult {
 }
 
 const CHUNK: usize = 1 << 16;
-const NOISE: [&str; 6] = ["Caches", "node_modules", ".git", "DerivedData", ".Trash", "Library"];
+const NOISE: [&str; 6] = [
+    "Caches",
+    "node_modules",
+    ".git",
+    "DerivedData",
+    ".Trash",
+    "Library",
+];
 
 /// (primary sort value, score, lower node id wins ties)
 type Key = (i64, i32, Reverse<u32>);
 
 fn now_secs() -> i64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64)
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs() as i64)
 }
 
 /// Node ids of directories whose full path equals `under`. None = no restriction.
@@ -81,7 +90,9 @@ fn is_under(index: &Index, mut i: u32, roots: &[u32]) -> bool {
 }
 
 fn ext_matches(name_lower: &[u8], exts: &[String]) -> bool {
-    let Some(dot) = memchr::memrchr(b'.', name_lower) else { return false };
+    let Some(dot) = memchr::memrchr(b'.', name_lower) else {
+        return false;
+    };
     let ext = &name_lower[dot + 1..];
     exts.iter().any(|e| e.as_bytes() == ext)
 }
@@ -96,7 +107,9 @@ fn word_score(name: &[u8], lower: &[u8], word: &[u8], pos: usize) -> i32 {
     }
     let prev = lower[pos - 1];
     // camelCase needs the original bytes, only comparable when lowercasing kept the length.
-    let camel = name.len() == lower.len() && name[pos].is_ascii_uppercase() && name[pos - 1].is_ascii_lowercase();
+    let camel = name.len() == lower.len()
+        && name[pos].is_ascii_uppercase()
+        && name[pos - 1].is_ascii_lowercase();
     if matches!(prev, b' ' | b'-' | b'_' | b'.') || camel {
         400
     } else {
@@ -124,7 +137,11 @@ pub fn search(index: &Index, q: &Query, limit: usize, sort: Sort) -> SearchResul
         return SearchResult::default();
     }
     let finders: Vec<Finder> = q.words.iter().map(|w| Finder::new(w.as_bytes())).collect();
-    let not_finders: Vec<Finder> = q.not_words.iter().map(|w| Finder::new(w.as_bytes())).collect();
+    let not_finders: Vec<Finder> = q
+        .not_words
+        .iter()
+        .map(|w| Finder::new(w.as_bytes()))
+        .collect();
     let roots = q.under.as_deref().and_then(|u| under_ids(index, u));
     let now = now_secs();
     let phrase = q.words.join(" ");
@@ -202,7 +219,11 @@ pub fn search(index: &Index, q: &Query, limit: usize, sort: Sort) -> SearchResul
                     Sort::Mtime => node.mtime,
                 };
                 // The place penalty only lowers the score: skip the parent walk if we can't enter the heap anyway.
-                if heap.len() >= limit && heap.peek().is_none_or(|Reverse((min, _))| (primary, score, Reverse(i)) <= *min) {
+                if heap.len() >= limit
+                    && heap
+                        .peek()
+                        .is_none_or(|Reverse((min, _))| (primary, score, Reverse(i)) <= *min)
+                {
                     continue;
                 }
                 score -= place_penalty(index, i);
@@ -211,7 +232,11 @@ pub fn search(index: &Index, q: &Query, limit: usize, sort: Sort) -> SearchResul
                     heap.pop();
                 }
             }
-            (count, by_kind, heap.into_iter().map(|Reverse(x)| x).collect())
+            (
+                count,
+                by_kind,
+                heap.into_iter().map(|Reverse(x)| x).collect(),
+            )
         })
         .collect();
 
@@ -227,10 +252,22 @@ pub fn search(index: &Index, q: &Query, limit: usize, sort: Sort) -> SearchResul
         .into_iter()
         .map(|((_, score, _), i)| {
             let node = &index.nodes[i as usize];
-            Hit { node: i, path: index.path(i), kind: node.kind, size: node.size, mtime: node.mtime, score }
+            Hit {
+                node: i,
+                path: index.path(i),
+                kind: node.kind,
+                size: node.size,
+                mtime: node.mtime,
+                score,
+            }
         })
         .collect();
-    SearchResult { hits, total, by_kind, took_us: start.elapsed().as_micros() as u64 }
+    SearchResult {
+        hits,
+        total,
+        by_kind,
+        took_us: start.elapsed().as_micros() as u64,
+    }
 }
 
 #[cfg(test)]
@@ -259,7 +296,10 @@ mod tests {
     }
 
     fn names(r: &SearchResult) -> Vec<String> {
-        r.hits.iter().map(|h| h.path.rsplit('/').next().unwrap().to_string()).collect()
+        r.hits
+            .iter()
+            .map(|h| h.path.rsplit('/').next().unwrap().to_string())
+            .collect()
     }
 
     fn run(q: &str) -> SearchResult {
@@ -279,14 +319,17 @@ mod tests {
         let n = names(&r);
         let at = |s: &str| n.iter().position(|x| x == s).unwrap();
         assert_eq!(n[0], "invoice.pdf"); // prefix + recent
-        // Exact name under Library/Caches is pushed below a clean prefix match.
+                                         // Exact name under Library/Caches is pushed below a clean prefix match.
         assert!(at("invoices") < at("invoice"));
         assert!(at("MyInvoice.txt") < at("old_invoice_2025.pdf")); // camel start beats substring
     }
 
     #[test]
     fn filters() {
-        assert_eq!(names(&run("invoice *.pdf !draft")), ["invoice.pdf", "old_invoice_2025.pdf"]);
+        assert_eq!(
+            names(&run("invoice *.pdf !draft")),
+            ["invoice.pdf", "old_invoice_2025.pdf"]
+        );
         assert_eq!(names(&run("ext:jpg")), ["photo.JPG"]);
         assert_eq!(names(&run("invoice type:dir")), ["invoices"]);
         assert_eq!(names(&run("invoice size:>1MB")).len(), 2);
@@ -319,7 +362,10 @@ mod tests {
 
     #[test]
     fn in_root_and_case_insensitive() {
-        assert!(run("photo in:/users/ME/documents").total == 1, "case-insensitive in:");
+        assert!(
+            run("photo in:/users/ME/documents").total == 1,
+            "case-insensitive in:"
+        );
         let mut ix = Index::default();
         let r = ix.push(NO_PARENT, "/tmp/root", Kind::Dir, 0, 0);
         ix.push(r, "a.txt", Kind::File, 0, 0);

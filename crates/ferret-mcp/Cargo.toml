@@ -3,6 +3,9 @@ name = "ferret-mcp"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
+description = "Ferret's read-only MCP server for AI coding agents"
+publish = false
 
 [dependencies]
 unicode-normalization = "0.1"

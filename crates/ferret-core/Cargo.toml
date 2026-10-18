@@ -3,6 +3,9 @@ name = "ferret-core"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
+description = "Ferret's index, scanner, query engine, snapshot and socket protocol"
+publish = false
 
 [dependencies]
 libc = "0.2.150"

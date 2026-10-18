@@ -3,11 +3,11 @@
 use objc2_core_foundation::{kCFRunLoopDefaultMode, CFArray, CFRunLoop, CFString};
 use objc2_core_services as fs;
 use parking_lot::Mutex;
+use std::collections::HashSet;
 use std::ffi::{c_char, c_void, CStr, OsStr};
-use std::ptr::NonNull;
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
-use std::collections::HashSet;
+use std::ptr::NonNull;
 use std::sync::mpsc::{sync_channel, Receiver, SyncSender, TrySendError};
 use std::sync::Arc;
 
@@ -50,7 +50,11 @@ unsafe extern "C-unwind" fn callback(
     for i in 0..n {
         let (path, flags, id) = unsafe {
             let p = CStr::from_ptr(*paths.add(i));
-            (PathBuf::from(OsStr::from_bytes(p.to_bytes())), *flags.add(i), *ids.add(i))
+            (
+                PathBuf::from(OsStr::from_bytes(p.to_bytes())),
+                *flags.add(i),
+                *ids.add(i),
+            )
         };
         // Never block the run loop: on a full channel remember only where to rescan.
         if let Err(TrySendError::Full(ev)) = ctx.tx.try_send(Event { path, flags, id }) {
@@ -70,7 +74,10 @@ unsafe extern "C-unwind" fn callback(
 pub fn start(root: &Path, since: u64) -> (Receiver<Event>, Overflow) {
     let (tx, rx) = sync_channel(65_536);
     let overflow: Overflow = Arc::default();
-    let ctx = Ctx { tx, overflow: overflow.clone() };
+    let ctx = Ctx {
+        tx,
+        overflow: overflow.clone(),
+    };
     let root = root.to_string_lossy().into_owned();
     std::thread::Builder::new()
         .name("fsevents".into())
@@ -78,14 +85,28 @@ pub fn start(root: &Path, since: u64) -> (Receiver<Event>, Overflow) {
             let ctx = Box::into_raw(Box::new(ctx)); // lives for the process
             let root_cf = CFString::from_str(&root);
             let paths = CFArray::from_objects(&[&*root_cf]);
-            let mut context =
-                fs::FSEventStreamContext { version: 0, info: ctx as *mut c_void, retain: None, release: None, copyDescription: None };
+            let mut context = fs::FSEventStreamContext {
+                version: 0,
+                info: ctx as *mut c_void,
+                retain: None,
+                release: None,
+                copyDescription: None,
+            };
             let flags = fs::kFSEventStreamCreateFlagFileEvents
                 | fs::kFSEventStreamCreateFlagNoDefer
                 | fs::kFSEventStreamCreateFlagWatchRoot;
-            let stream =
-                fs::FSEventStreamCreate(None, Some(callback), &mut context, paths.as_opaque(), since, 0.5, flags);
-            let (Some(rl), Some(mode)) = (CFRunLoop::current(), kCFRunLoopDefaultMode) else { return };
+            let stream = fs::FSEventStreamCreate(
+                None,
+                Some(callback),
+                &mut context,
+                paths.as_opaque(),
+                since,
+                0.5,
+                flags,
+            );
+            let (Some(rl), Some(mode)) = (CFRunLoop::current(), kCFRunLoopDefaultMode) else {
+                return;
+            };
             if stream.is_null() {
                 tracing::error!("FSEventStreamCreate failed; live updates disabled");
                 return;

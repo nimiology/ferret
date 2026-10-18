@@ -15,8 +15,10 @@ use ferret_core::protocol::{KindFilter, SortArg};
 use ferret_core::Index;
 use ratatui::backend::CrosstermBackend;
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
-use ratatui::crossterm::terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen};
 use ratatui::crossterm::execute;
+use ratatui::crossterm::terminal::{
+    disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
+};
 use ratatui::layout::{Constraint, Layout};
 use ratatui::style::{Color, Modifier, Style, Stylize};
 use ratatui::text::{Line, Span};
@@ -52,7 +54,11 @@ impl Tab {
         }
     }
     fn sort(self) -> SortArg {
-        if self == Tab::Recent { SortArg::Mtime } else { SortArg::Score }
+        if self == Tab::Recent {
+            SortArg::Mtime
+        } else {
+            SortArg::Score
+        }
     }
 }
 
@@ -72,13 +78,26 @@ pub struct State {
 
 impl State {
     pub fn new(query: &str, tab: Tab) -> State {
-        State { query: query.into(), tab, gen: 0, paths: vec![], total: 0, took_us: 0, error: None, sel: 0, offset: 0, words: vec![] }
+        State {
+            query: query.into(),
+            tab,
+            gen: 0,
+            paths: vec![],
+            total: 0,
+            took_us: 0,
+            error: None,
+            sel: 0,
+            offset: 0,
+            words: vec![],
+        }
     }
 
     /// The query or tab changed: new generation, anything older is stale.
     pub fn bump(&mut self) -> u64 {
         self.gen += 1;
-        self.words = ferret_core::parse(&self.query).map(|q| q.words).unwrap_or_default();
+        self.words = ferret_core::parse(&self.query)
+            .map(|q| q.words)
+            .unwrap_or_default();
         self.gen
     }
 
@@ -136,7 +155,9 @@ fn spawn_search(be: &Backend, st: &State, tx: &Sender<Msg>) {
     };
     std::thread::spawn(move || {
         let r = match index {
-            None => search_daemon(&q, LIMIT, tab.sort(), tab.kind()).map_err(|e| anyhow::anyhow!("daemon: {e}")).and_then(|r| r),
+            None => search_daemon(&q, LIMIT, tab.sort(), tab.kind())
+                .map_err(|e| anyhow::anyhow!("daemon: {e}"))
+                .and_then(|r| r),
             Some(i) => search_local(i.get().unwrap(), &q, LIMIT, tab.sort(), tab.kind()),
         };
         let _ = tx.send(Msg::Result(gen, r.map_err(|e| e.to_string())));
@@ -144,7 +165,12 @@ fn spawn_search(be: &Backend, st: &State, tx: &Sender<Msg>) {
 }
 
 fn spawn_detached(cmd: &str, args: &[&str]) {
-    let _ = Command::new(cmd).args(args).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn();
+    let _ = Command::new(cmd)
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn();
 }
 
 fn copy(s: &str) {
@@ -174,7 +200,11 @@ pub fn run(query: &str, dirs: bool) -> Result<()> {
         Backend::Local(cell)
     };
 
-    let tty = OpenOptions::new().read(true).write(true).open("/dev/tty").context("cannot open /dev/tty")?;
+    let tty = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open("/dev/tty")
+        .context("cannot open /dev/tty")?;
     enable_raw_mode()?;
     let mut out = tty.try_clone()?;
     execute!(out, EnterAlternateScreen)?;
@@ -214,8 +244,12 @@ fn event_loop(
             }
         }
         term.draw(|f| {
-            let [q, list, status] =
-                Layout::vertical([Constraint::Length(1), Constraint::Min(0), Constraint::Length(1)]).areas(f.area());
+            let [q, list, status] = Layout::vertical([
+                Constraint::Length(1),
+                Constraint::Min(0),
+                Constraint::Length(1),
+            ])
+            .areas(f.area());
             height = list.height as usize;
             f.render_widget(
                 Paragraph::new(Line::from(vec![
@@ -239,7 +273,11 @@ fn event_loop(
                 .iter()
                 .map(|t| {
                     let s = Span::raw(format!(" {t:?} "));
-                    if *t == st.tab { s.reversed() } else { s.dim() }
+                    if *t == st.tab {
+                        s.reversed()
+                    } else {
+                        s.dim()
+                    }
                 });
             let msg = match &st.error {
                 Some(e) => e.clone(),
@@ -253,7 +291,9 @@ fn event_loop(
         if !event::poll(Duration::from_millis(30))? {
             continue;
         }
-        let Event::Key(k) = event::read()? else { continue };
+        let Event::Key(k) = event::read()? else {
+            continue;
+        };
         if k.kind == KeyEventKind::Release {
             continue;
         }
@@ -301,12 +341,23 @@ fn event_loop(
 
 fn row<'a>(path: &'a str, words: &[String], selected: bool) -> Line<'a> {
     let (parent, name, hit) = match_mask(path, words);
-    let mut spans = vec![Span::styled(parent, Style::new().add_modifier(Modifier::DIM))];
+    let mut spans = vec![Span::styled(
+        parent,
+        Style::new().add_modifier(Modifier::DIM),
+    )];
     for (t, on) in runs(name, &hit) {
-        spans.push(if on { Span::styled(t, Style::new().fg(Color::Indexed(208)).bold()) } else { Span::raw(t) });
+        spans.push(if on {
+            Span::styled(t, Style::new().fg(Color::Indexed(208)).bold())
+        } else {
+            Span::raw(t)
+        });
     }
     let line = Line::from(spans);
-    if selected { line.style(Style::new().bg(Color::Indexed(236))) } else { line }
+    if selected {
+        line.style(Style::new().bg(Color::Indexed(236)))
+    } else {
+        line
+    }
 }
 
 #[cfg(test)]
@@ -314,15 +365,32 @@ mod tests {
     use super::*;
 
     fn found(n: usize) -> Found {
-        let hit = |i| ferret_core::protocol::HitOut { path: format!("/p{i}"), kind: ferret_core::Kind::File, size: 0, mtime: 0 };
-        Found { hits: (0..n).map(hit).collect(), total: n, took_us: 4000 }
+        let hit = |i| ferret_core::protocol::HitOut {
+            path: format!("/p{i}"),
+            kind: ferret_core::Kind::File,
+            size: 0,
+            mtime: 0,
+        };
+        Found {
+            hits: (0..n).map(hit).collect(),
+            total: n,
+            took_us: 4000,
+        }
     }
 
     #[test]
     fn tabs_cycle() {
         let mut t = Tab::All;
-        let seen: Vec<Tab> = (0..5).map(|_| { t = t.next(); t }).collect();
-        assert_eq!(seen, [Tab::Files, Tab::Folders, Tab::Recent, Tab::All, Tab::Files]);
+        let seen: Vec<Tab> = (0..5)
+            .map(|_| {
+                t = t.next();
+                t
+            })
+            .collect();
+        assert_eq!(
+            seen,
+            [Tab::Files, Tab::Folders, Tab::Recent, Tab::All, Tab::Files]
+        );
         assert_eq!(Tab::Folders.kind(), KindFilter::Dir);
         assert_eq!(Tab::Recent.sort(), SortArg::Mtime);
     }
@@ -334,7 +402,10 @@ mod tests {
         st.query.push('o');
         let g2 = st.bump();
         assert!(st.apply(g2, Ok(found(3))));
-        assert!(!st.apply(g1, Ok(found(9))), "older generation must be ignored");
+        assert!(
+            !st.apply(g1, Ok(found(9))),
+            "older generation must be ignored"
+        );
         assert_eq!((st.paths.len(), st.total), (3, 3));
         assert_eq!(st.words, ["invo"]);
     }

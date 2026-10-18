@@ -39,10 +39,18 @@ struct Args {
 }
 
 fn parse_args() -> Result<Args, String> {
-    let mut a = Args { root: "/".into(), snapshot: snapshot::default_path(), socket: protocol::socket_path() };
+    let mut a = Args {
+        root: "/".into(),
+        snapshot: snapshot::default_path(),
+        socket: protocol::socket_path(),
+    };
     let mut it = std::env::args().skip(1);
     while let Some(flag) = it.next() {
-        let mut val = || it.next().map(PathBuf::from).ok_or(format!("{flag} needs a value"));
+        let mut val = || {
+            it.next()
+                .map(PathBuf::from)
+                .ok_or(format!("{flag} needs a value"))
+        };
         match flag.as_str() {
             "--root" => a.root = val()?,
             "--snapshot" => a.snapshot = val()?,
@@ -55,8 +63,12 @@ fn parse_args() -> Result<Args, String> {
 
 /// Root volume UUID from `diskutil info -plist /`; empty if unavailable.
 fn volume_uuid() -> String {
-    let out = std::process::Command::new("/usr/sbin/diskutil").args(["info", "-plist", "/"]).output();
-    let text = out.map(|o| String::from_utf8_lossy(&o.stdout).into_owned()).unwrap_or_default();
+    let out = std::process::Command::new("/usr/sbin/diskutil")
+        .args(["info", "-plist", "/"])
+        .output();
+    let text = out
+        .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+        .unwrap_or_default();
     text.split_once("<key>VolumeUUID</key>")
         .and_then(|(_, rest)| rest.split_once("<string>"))
         .and_then(|(_, rest)| rest.split_once("</string>"))
@@ -68,7 +80,10 @@ fn save(sh: &Shared) {
     let _g = sh.save_lock.lock();
     sh.dirty.store(false, Relaxed);
     let start = Instant::now();
-    let meta = Meta { last_event_id: sh.last_event_id.load(Relaxed), volume_uuid: sh.volume_uuid.clone() };
+    let meta = Meta {
+        last_event_id: sh.last_event_id.load(Relaxed),
+        volume_uuid: sh.volume_uuid.clone(),
+    };
     // Encode under the read lock, write after releasing it: a queued writer would otherwise
     // block every search for the whole disk write (parking_lot is writer-fair).
     let encoded = {
@@ -76,7 +91,11 @@ fn save(sh: &Shared) {
         snapshot::encode(&ix, &meta).map(|b| (b, ix.live_count()))
     };
     match encoded.and_then(|(b, n)| snapshot::write_bytes(&b, &sh.snapshot).map(|_| n)) {
-        Ok(n) => info!(entries = n, ms = start.elapsed().as_millis() as u64, "snapshot saved"),
+        Ok(n) => info!(
+            entries = n,
+            ms = start.elapsed().as_millis() as u64,
+            "snapshot saved"
+        ),
         Err(e) => {
             sh.dirty.store(true, Relaxed);
             error!("snapshot save failed: {e}");
@@ -90,12 +109,21 @@ fn full_scan(sh: &Shared) {
     let guess = sh.index.read().len() as f32;
     info!(root = %sh.root.display(), "full scan started");
     let res = scan::scan_with_progress(&sh.root, |n, p| {
-        let progress = if guess > 1.0 { (n as f32 / guess).min(0.99) } else { 0.0 };
+        let progress = if guess > 1.0 {
+            (n as f32 / guess).min(0.99)
+        } else {
+            0.0
+        };
         *sh.progress.lock() = (progress, Some(p.to_string_lossy().into_owned()));
     });
     match res {
         Ok((ix, st)) => {
-            info!(entries = ix.len(), secs = st.elapsed.as_secs(), denied = st.permission_denied, "full scan done");
+            info!(
+                entries = ix.len(),
+                secs = st.elapsed.as_secs(),
+                denied = st.permission_denied,
+                "full scan done"
+            );
             sh.permission_denied.store(st.permission_denied, Relaxed);
             *sh.index.write() = ix;
             sh.dirty.store(true, Relaxed);
@@ -117,7 +145,9 @@ fn writer(sh: Arc<Shared>, rx: Receiver<fsevents::Event>, overflow: fsevents::Ov
     loop {
         let mut deadline = None;
         loop {
-            let wait = deadline.map_or(Duration::from_secs(1), |d: Instant| d.saturating_duration_since(Instant::now()));
+            let wait = deadline.map_or(Duration::from_secs(1), |d: Instant| {
+                d.saturating_duration_since(Instant::now())
+            });
             let ev = match rx.recv_timeout(wait) {
                 Ok(ev) => ev,
                 Err(RecvTimeoutError::Timeout) => break,
@@ -145,7 +175,10 @@ fn writer(sh: Arc<Shared>, rx: Receiver<fsevents::Event>, overflow: fsevents::Ov
             }
         }
         if let Some((overflowed, id)) = overflow.lock().take() {
-            warn!(dirs = overflowed.len(), "event channel overflowed; re-listing affected folders");
+            warn!(
+                dirs = overflowed.len(),
+                "event channel overflowed; re-listing affected folders"
+            );
             max_id = max_id.max(id);
             for d in overflowed {
                 if d == Path::new("/") || !d.starts_with(&sh.root) {
@@ -162,13 +195,17 @@ fn writer(sh: Arc<Shared>, rx: Receiver<fsevents::Event>, overflow: fsevents::Ov
             subtrees.insert(sh.root.clone());
         }
         // Events seen during a full scan are applied after the swap.
-        if sh.indexing.load(Relaxed) || (dirs.is_empty() && subtrees.is_empty() && paths.is_empty()) {
+        if sh.indexing.load(Relaxed) || (dirs.is_empty() && subtrees.is_empty() && paths.is_empty())
+        {
             continue;
         }
         let start = Instant::now();
         let n = dirs.len() + subtrees.len() + paths.len();
         dirs.retain(|d| !subtrees.iter().any(|s| d.starts_with(s)));
-        paths.retain(|p| !subtrees.iter().any(|s| p.starts_with(s)) && !p.parent().is_some_and(|d| dirs.contains(d)));
+        paths.retain(|p| {
+            !subtrees.iter().any(|s| p.starts_with(s))
+                && !p.parent().is_some_and(|d| dirs.contains(d))
+        });
         if !paths.is_empty() {
             let mut ix = sh.index.write();
             for p in paths.drain() {
@@ -235,10 +272,19 @@ fn handle(sh: &Shared, line: &str) -> Response {
             };
         }
     };
-    let mut resp = Response { v: req.v, id: req.id, ..Default::default() };
+    let mut resp = Response {
+        v: req.v,
+        id: req.id,
+        ..Default::default()
+    };
     match req.op {
         Op::Status => resp.status = Some(status(sh)),
-        Op::Search { q, limit, sort, kind } => {
+        Op::Search {
+            q,
+            limit,
+            sort,
+            kind,
+        } => {
             let mut query = match ferret_core::parse(&q) {
                 Ok(q) => q,
                 Err(e) => {
@@ -261,8 +307,16 @@ fn handle(sh: &Shared, line: &str) -> Response {
             resp.took_us = r.took_us;
             resp.total = r.total;
             resp.by_kind = r.by_kind;
-            resp.hits =
-                r.hits.into_iter().map(|h| HitOut { path: h.path, kind: h.kind, size: h.size, mtime: h.mtime }).collect();
+            resp.hits = r
+                .hits
+                .into_iter()
+                .map(|h| HitOut {
+                    path: h.path,
+                    kind: h.kind,
+                    size: h.size,
+                    mtime: h.mtime,
+                })
+                .collect();
         }
     }
     resp
@@ -292,7 +346,10 @@ fn bind(path: &Path) -> std::io::Result<UnixListener> {
         let _ = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700));
     }
     if std::os::unix::net::UnixStream::connect(path).is_ok() {
-        return Err(std::io::Error::new(std::io::ErrorKind::AddrInUse, "another ferretd is already listening"));
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::AddrInUse,
+            "another ferretd is already listening",
+        ));
     }
     let _ = std::fs::remove_file(path); // stale socket from a crash
     let l = UnixListener::bind(path)?;
@@ -301,7 +358,10 @@ fn bind(path: &Path) -> std::io::Result<UnixListener> {
 }
 
 fn main() {
-    tracing_subscriber::fmt().with_writer(std::io::stderr).with_ansi(false).init();
+    tracing_subscriber::fmt()
+        .with_writer(std::io::stderr)
+        .with_ansi(false)
+        .init();
     let args = match parse_args() {
         Ok(a) => a,
         Err(e) => {
@@ -337,9 +397,17 @@ fn main() {
     };
     let need_scan = loaded.is_none();
     let (index, meta) = loaded.unwrap_or_default();
-    info!(entries = index.live_count(), ms = start.elapsed().as_millis() as u64, "snapshot loaded");
+    info!(
+        entries = index.live_count(),
+        ms = start.elapsed().as_millis() as u64,
+        "snapshot loaded"
+    );
     // `ff index` stores the event id from just before its scan, so changes since are replayed.
-    let since = if meta.last_event_id > 0 { meta.last_event_id } else { fsevents::current_event_id() };
+    let since = if meta.last_event_id > 0 {
+        meta.last_event_id
+    } else {
+        fsevents::current_event_id()
+    };
     let sh = Arc::new(Shared {
         index: RwLock::new(index),
         root: root.clone(),
@@ -354,13 +422,19 @@ fn main() {
     });
 
     let (rx, overflow) = fsevents::start(&root, since);
-    std::thread::Builder::new().name("writer".into()).spawn({
-        let sh = sh.clone();
-        move || writer(sh, rx, overflow)
-    }).expect("spawn writer");
+    std::thread::Builder::new()
+        .name("writer".into())
+        .spawn({
+            let sh = sh.clone();
+            move || writer(sh, rx, overflow)
+        })
+        .expect("spawn writer");
     if need_scan {
         let sh = sh.clone();
-        std::thread::Builder::new().name("scan".into()).spawn(move || full_scan(&sh)).expect("spawn scan");
+        std::thread::Builder::new()
+            .name("scan".into())
+            .spawn(move || full_scan(&sh))
+            .expect("spawn scan");
     }
 
     let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
@@ -385,7 +459,8 @@ fn main() {
                 }
             }
         });
-        let mut term = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()).expect("SIGTERM");
+        let mut term = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("SIGTERM");
         loop {
             tokio::select! {
                 acc = listener.accept() => match acc {

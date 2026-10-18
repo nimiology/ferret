@@ -1,0 +1,44 @@
+# Builds the menu bar app as a universal (Apple Silicon + Intel) .dmg.
+# Called by release.yml (dist's global-artifacts-jobs); anything uploaded as
+# `artifacts-*` is attached to the GitHub Release.
+name: build-dmg
+
+on:
+  workflow_call:
+    inputs:
+      plan:
+        required: true
+        type: string
+
+jobs:
+  dmg:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust targets
+        run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+      - name: Install cargo-packager
+        run: cargo install cargo-packager --locked
+      - name: Build universal binary
+        run: |
+          cargo build --release -p ferret-app --target aarch64-apple-darwin
+          cargo build --release -p ferret-app --target x86_64-apple-darwin
+          mkdir -p target/release
+          lipo -create -output target/release/ferret \
+            target/aarch64-apple-darwin/release/ferret \
+            target/x86_64-apple-darwin/release/ferret
+          lipo -info target/release/ferret
+      - name: Package .dmg
+        working-directory: crates/ferret-app
+        run: cargo packager --release --formats dmg
+      - name: Name the .dmg
+        run: |
+          version=$(cargo metadata --format-version 1 --no-deps | jq -r '.packages[] | select(.name=="ferret-app") | .version')
+          mkdir -p dmg
+          mv target/packager/*.dmg "dmg/Ferret-${version}-universal.dmg"
+          ls -la dmg
+      - uses: actions/upload-artifact@v4
+        with:
+          name: artifacts-dmg
+          path: dmg/*.dmg

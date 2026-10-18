@@ -94,7 +94,9 @@ fn fold(p: &Path) -> PathBuf {
 
 /// Lexical form plus the symlink-resolved form when it differs (e.g. /var -> /private/var), folded.
 fn root_forms(p: PathBuf) -> Vec<PathBuf> {
-    let Some(p) = normalize(&p) else { return vec![] };
+    let Some(p) = normalize(&p) else {
+        return vec![];
+    };
     match std::fs::canonicalize(&p) {
         Ok(c) if c != p => vec![fold(&p), fold(&c)],
         _ => vec![fold(&p)],
@@ -105,9 +107,15 @@ impl Policy {
     /// Allow defaults to `home`; the default deny list is always added.
     pub fn new(home: &Path, allow: Option<Vec<String>>, deny: Vec<String>) -> Self {
         let allow = allow.unwrap_or_else(|| vec!["~".into()]);
-        let deny = DEFAULT_DENY.iter().map(|d| home.join(d)).chain(deny.iter().map(|d| expand_tilde(d, home)));
+        let deny = DEFAULT_DENY
+            .iter()
+            .map(|d| home.join(d))
+            .chain(deny.iter().map(|d| expand_tilde(d, home)));
         Policy {
-            allow: allow.iter().flat_map(|a| root_forms(expand_tilde(a, home))).collect(),
+            allow: allow
+                .iter()
+                .flat_map(|a| root_forms(expand_tilde(a, home)))
+                .collect(),
             deny: deny.flat_map(root_forms).collect(),
         }
     }
@@ -143,20 +151,52 @@ pub struct Ctx {
 }
 
 impl Ctx {
-    pub fn new(policy: Policy, home: PathBuf, snapshot: PathBuf, log: PathBuf, daemon: bool) -> Self {
-        Ctx { policy, home, snapshot, log, daemon, index: OnceLock::new() }
+    pub fn new(
+        policy: Policy,
+        home: PathBuf,
+        snapshot: PathBuf,
+        log: PathBuf,
+        daemon: bool,
+    ) -> Self {
+        Ctx {
+            policy,
+            home,
+            snapshot,
+            log,
+            daemon,
+            index: OnceLock::new(),
+        }
     }
 
     fn from_env() -> anyhow::Result<Self> {
-        let home = PathBuf::from(std::env::var_os("HOME").ok_or_else(|| anyhow::anyhow!("$HOME is not set"))?);
+        let home = PathBuf::from(
+            std::env::var_os("HOME").ok_or_else(|| anyhow::anyhow!("$HOME is not set"))?,
+        );
         let policy = Policy::load(&home, &home.join(".config/ferret/config.toml"))?;
         let log = home.join("Library/Logs/ferret/mcp.log");
-        Ok(Ctx::new(policy, home, ferret_core::snapshot::default_path(), log, true))
+        Ok(Ctx::new(
+            policy,
+            home,
+            ferret_core::snapshot::default_path(),
+            log,
+            true,
+        ))
     }
 
-    fn engine_search(&self, q: &str, limit: usize, sort: SortArg, kind: KindFilter) -> Result<Vec<HitOut>, String> {
+    fn engine_search(
+        &self,
+        q: &str,
+        limit: usize,
+        sort: SortArg,
+        kind: KindFilter,
+    ) -> Result<Vec<HitOut>, String> {
         if self.daemon {
-            if let Ok(r) = protocol::request(Op::Search { q: q.to_string(), limit, sort, kind }) {
+            if let Ok(r) = protocol::request(Op::Search {
+                q: q.to_string(),
+                limit,
+                sort,
+                kind,
+            }) {
                 return match r.error {
                     Some(e) => Err(e),
                     None => Ok(r.hits),
@@ -177,7 +217,15 @@ impl Ctx {
         }
         let index = self.index()?;
         let r = ferret_core::search(index, &query, limit, sort.into());
-        Ok(r.hits.into_iter().map(|h| HitOut { path: h.path, kind: h.kind, size: h.size, mtime: h.mtime }).collect())
+        Ok(r.hits
+            .into_iter()
+            .map(|h| HitOut {
+                path: h.path,
+                kind: h.kind,
+                size: h.size,
+                mtime: h.mtime,
+            })
+            .collect())
     }
 
     /// Cache only a successful load, so a snapshot written later (e.g. by `ff index`) is picked up.
@@ -185,8 +233,9 @@ impl Ctx {
         if let Some(i) = self.index.get() {
             return Ok(i);
         }
-        let i = ferret_core::snapshot::load(&self.snapshot)
-            .map_err(|e| format!("Ferret daemon is not running and no index snapshot could be read: {e}"))?;
+        let i = ferret_core::snapshot::load(&self.snapshot).map_err(|e| {
+            format!("Ferret daemon is not running and no index snapshot could be read: {e}")
+        })?;
         Ok(self.index.get_or_init(|| i))
     }
 
@@ -216,11 +265,20 @@ impl Ctx {
     }
 }
 
-fn filter_hits(policy: &Policy, hits: Vec<HitOut>, under: Option<&Path>, limit: usize) -> Vec<HitOut> {
+fn filter_hits(
+    policy: &Policy,
+    hits: Vec<HitOut>,
+    under: Option<&Path>,
+    limit: usize,
+) -> Vec<HitOut> {
     let under = under.and_then(normalize);
     hits.into_iter()
         .filter(|h| policy.allows(Path::new(&h.path)))
-        .filter(|h| under.as_ref().is_none_or(|u| Path::new(&h.path).starts_with(u)))
+        .filter(|h| {
+            under
+                .as_ref()
+                .is_none_or(|u| Path::new(&h.path).starts_with(u))
+        })
         .take(limit.min(MAX_LIMIT))
         .collect()
 }
@@ -233,7 +291,10 @@ fn log_line(ts: i64, tool: &str, args: &serde_json::Value, count: usize, took_ms
 // ---------- formatting ----------
 
 fn now_secs() -> i64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
 }
 
 fn human_size(n: u64) -> String {
@@ -265,7 +326,11 @@ fn fmt_time(secs: i64) -> String {
     let d = doy - (153 * mp + 2) / 5 + 1;
     let m = if mp < 10 { mp + 3 } else { mp - 9 };
     let y = yoe + era * 400 + i64::from(m <= 2);
-    format!("{y:04}-{m:02}-{d:02} {:02}:{:02}", rem / 3600, rem % 3600 / 60)
+    format!(
+        "{y:04}-{m:02}-{d:02} {:02}:{:02}",
+        rem / 3600,
+        rem % 3600 / 60
+    )
 }
 
 /// One line per hit, home shown as `~` (every token here is re-sent on later turns).
@@ -281,7 +346,11 @@ fn render(hits: &[HitOut], home: &Path) -> String {
             _ => h.path.clone(),
         };
         let slash = if h.kind == Kind::Dir { "/" } else { "" };
-        s += &format!("{path}{slash}  {}  {}\n", human_size(h.size), fmt_time(h.mtime));
+        s += &format!(
+            "{path}{slash}  {}  {}\n",
+            human_size(h.size),
+            fmt_time(h.mtime)
+        );
     }
     s
 }
@@ -289,7 +358,8 @@ fn render(hits: &[HitOut], home: &Path) -> String {
 fn file_info(ctx: &Ctx, path: &str) -> Result<String, String> {
     // Same message for missing and denied: no existence oracle for private paths.
     let nope = || format!("{path}: not found or not allowed");
-    let lexical = normalize(&expand_tilde(path, &ctx.home)).ok_or_else(|| "path must be absolute or start with ~".to_string())?;
+    let lexical = normalize(&expand_tilde(path, &ctx.home))
+        .ok_or_else(|| "path must be absolute or start with ~".to_string())?;
     if !ctx.policy.allows(&lexical) {
         return Err(nope());
     }
@@ -299,7 +369,10 @@ fn file_info(ctx: &Ctx, path: &str) -> Result<String, String> {
     }
     let md = std::fs::metadata(&real).map_err(|_| nope())?;
     let secs = |t: std::io::Result<SystemTime>| {
-        t.ok().and_then(|t| t.duration_since(UNIX_EPOCH).ok()).map(|d| fmt_time(d.as_secs() as i64)).unwrap_or("unknown".into())
+        t.ok()
+            .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+            .map(|d| fmt_time(d.as_secs() as i64))
+            .unwrap_or("unknown".into())
     };
     let mut s = format!("path: {}\n", real.display());
     s += &format!("kind: {}\n", if md.is_dir() { "dir" } else { "file" });
@@ -307,7 +380,9 @@ fn file_info(ctx: &Ctx, path: &str) -> Result<String, String> {
     s += &format!("created: {}\n", secs(md.created()));
     s += &format!("modified: {}\n", secs(md.modified()));
     if md.is_dir() {
-        let n = std::fs::read_dir(&real).map(|r| r.count()).map_err(|_| nope())?;
+        let n = std::fs::read_dir(&real)
+            .map(|r| r.count())
+            .map_err(|_| nope())?;
         s += &format!("children: {n}\n");
     }
     Ok(s)
@@ -350,10 +425,13 @@ impl FerretMcp {
     ) -> Result<String, String> {
         let start = Instant::now();
         let ctx = self.ctx.clone();
-        let r = tokio::task::spawn_blocking(move || f(&ctx)).await.unwrap_or_else(|e| Err(e.to_string()));
+        let r = tokio::task::spawn_blocking(move || f(&ctx))
+            .await
+            .unwrap_or_else(|e| Err(e.to_string()));
         let args = serde_json::to_value(args).unwrap_or_default();
         let count = r.as_ref().map(|r| r.1).unwrap_or(0);
-        self.ctx.log_call(tool, &args, count, start.elapsed().as_millis());
+        self.ctx
+            .log_call(tool, &args, count, start.elapsed().as_millis());
         r.map(|r| r.0)
     }
 }
@@ -391,10 +469,15 @@ impl FerretMcp {
         .await
     }
 
-    #[tool(description = "Kind, size, created/modified dates and child count of one file or folder. Never reads contents.")]
+    #[tool(
+        description = "Kind, size, created/modified dates and child count of one file or folder. Never reads contents."
+    )]
     async fn file_info(&self, Parameters(a): Parameters<InfoArgs>) -> Result<String, String> {
         let path = a.path.clone();
-        self.call("file_info", a, move |ctx| file_info(ctx, &path).map(|s| (s, 1))).await
+        self.call("file_info", a, move |ctx| {
+            file_info(ctx, &path).map(|s| (s, 1))
+        })
+        .await
     }
 }
 

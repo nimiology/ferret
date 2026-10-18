@@ -3,12 +3,20 @@ name = "ferret-app"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
+description = "Ferret menu bar app"
+publish = false
+
+# Shipped as a .dmg by the dmg job in release.yml, not as a Homebrew formula.
+[package.metadata.dist]
+dist = false
 
 [[bin]]
 name = "ferret"
 path = "src/main.rs"
 
-# `cargo install cargo-packager --locked` then, from this directory: `cargo packager --release`
+# `cargo build --release -p ferret-app`, then from this directory: `cargo packager --release`
+# (CI builds a universal binary first; see .github/workflows/build-dmg.yml).
 # Icons: `cargo run -p ferret-app --example make_icons` + iconutil (see examples/make_icons.rs).
 [package.metadata.packager]
 product-name = "Ferret"
@@ -16,7 +24,6 @@ identifier = "com.ferret.app"
 category = "Utility"
 formats = ["app", "dmg"]
 icons = ["assets/AppIcon.icns"]
-before-packaging-command = "cargo build --release -p ferret-app"
 out-dir = "../../target/packager"
 binaries-dir = "../../target/release"
 binaries = [{ path = "ferret", main = true }]
