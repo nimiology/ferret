@@ -1,71 +1,111 @@
+<div align="center">
+
+<img src="docs/assets/icon.png" width="128" alt="Ferret icon: a ferret whose head is a magnifying lens">
+
 # Ferret
 
 **fzf for your whole Mac, and your AI agent can use it too.**
 
-Ferret indexes every file name on your disk once, keeps the index live with FSEvents, and answers queries in milliseconds. It ships as:
+Ferret remembers the name of every file on your disk and finds any of them in milliseconds,
+from your terminal, your menu bar, or your AI coding agent.
 
-- `ff`: the CLI and an interactive picker (`ff -i`)
-- `ferretd`: a small background daemon that keeps the index in memory and up to date
-- `ff mcp`: an MCP server so Claude Code, Cursor and other agents can find files by name and metadata (never contents)
-- `Ferret.app`: a menu bar app with a ⌥Space search panel (egui, no webview)
+[![CI](https://github.com/nimiology/ferret/actions/workflows/ci.yml/badge.svg)](https://github.com/nimiology/ferret/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/nimiology/ferret?color=ff9259)](https://github.com/nimiology/ferret/releases/latest)
+![macOS](https://img.shields.io/badge/macOS-Apple%20Silicon%20%7C%20Intel-1c1b19)
+![Rust](https://img.shields.io/badge/made%20with-Rust-c4501b)
+[![License: MIT](https://img.shields.io/badge/license-MIT-6e6b65)](LICENSE)
 
-<!-- Demo GIFs: record with vhs (see docs/demo/*.tape), then uncomment. -->
-<!-- ![ff in the terminal](docs/demo/ff.gif) -->
-<!-- ![Claude Code using ff mcp](docs/demo/mcp.gif) -->
+<img src="docs/demo/ff.gif" width="820" alt="ff finding invoices, the biggest files and a Cargo.toml in milliseconds, then the interactive picker">
+
+</div>
+
+---
+
+## Why Ferret?
+
+You know the file exists. You just don't remember where you put it. 🐾
+
+Spotlight skips hidden folders and half your dev tree. `find` takes a minute and a half. Ferret walks your whole disk **once**, keeps the index fresh as files change, and then answers in the time it takes to lift your finger off the key:
+
+- ⚡ **Instant**: a search over 4 million files comes back in 20–40 ms.
+- 🔭 **Everything**: hidden folders, `node_modules`, `.git`, system folders, all of it.
+- 🔄 **Always fresh**: a tiny daemon follows macOS file events, so new files show up within a second.
+- 🤖 **Agent-ready**: Claude Code, Cursor and friends can search your disk through MCP, never seeing file contents.
+- 🪶 **Light**: idle CPU around 0.4%. No Electron, no webview, no telemetry. Your index never leaves your Mac.
+
+## What's in the box
+
+| | What it is |
+|---|---|
+| **`ff`** | The command line: search, a live interactive picker (`ff -i`), and shell widgets (Ctrl-T, `fcd`) |
+| **`ferretd`** | A small background daemon that keeps the index in memory and up to date |
+| **`ff mcp`** | An MCP server so AI agents can find files by name and metadata |
+| **Ferret.app** | A menu bar app: press ⌥Space anywhere, type, hit Enter |
 
 ## Install
 
-```sh
-# CLI + daemon (ff, ferretd)
-brew install nimiology/ferret/ferret
+**CLI + daemon** with Homebrew:
 
-# From source (Rust stable)
-git clone https://github.com/nimiology/ferret && cd ferret
-cargo install --path crates/ferret        # ff + ferretd
-cargo install --path crates/ferret-app    # ferret (menu bar app binary)
+```sh
+brew install nimiology/ferret/ferret
 ```
 
-**Menu bar app:** download `Ferret-<version>-universal.dmg` from the [latest release](https://github.com/nimiology/ferret/releases/latest) (Apple Silicon and Intel). It isn't signed yet, so the first time, right-click Ferret.app → Open.
+**Menu bar app:** grab `Ferret-<version>-universal.dmg` from the [latest release](https://github.com/nimiology/ferret/releases/latest) (Apple Silicon and Intel). It isn't notarized yet, so the first time, right-click Ferret.app → **Open**.
 
-Release tarballs for Apple Silicon and Intel, with a shell installer, are attached to each [GitHub release](https://github.com/nimiology/ferret/releases).
+<details>
+<summary>From source</summary>
+
+```sh
+git clone https://github.com/nimiology/ferret && cd ferret
+cargo install --path crates/ferret        # ff + ferretd
+cargo install --path crates/ferret-app    # the menu bar app binary
+```
+
+Release tarballs and a shell installer are also attached to every [GitHub release](https://github.com/nimiology/ferret/releases).
+</details>
 
 ## Quick start
 
 ```sh
-ff index                      # first full scan (see benchmarks for timing)
-ff daemon install             # launchd agent: keeps the index live
-ff invoice 2025 *.pdf         # all words must appear in the name
-ff ext:psd size:>100MB        # big Photoshop files
-ff -i                         # interactive picker
-eval "$(ff init zsh)"         # add to ~/.zshrc: Ctrl-T inserts a path, `fcd` jumps to a folder
+ff index                        # first full scan, about a minute and a half
+ff daemon install               # keep the index live in the background
+ff invoice 2025 ext:pdf         # every word must appear in the name
+ff big in:~/Downloads           # biggest files first
+ff -i                           # interactive picker
+eval "$(ff init zsh)"           # in ~/.zshrc: Ctrl-T inserts a path, `fcd` jumps to a folder
 ```
 
-Without the daemon, `ff` falls back to the last snapshot (`~/Library/Caches/ferret/index.bin`).
+Not sure everything is set up? `ff doctor` checks the index, the daemon and Full Disk Access, and tells you exactly what to fix.
 
-## Query syntax
+## Searching
 
-| Token | Meaning | Example |
+| Type | Finds | Example |
 |---|---|---|
-| `word` | name contains word (case-insensitive); all words must match | `ff tax 2025` |
-| `"exact phrase"` | name contains the phrase | `ff "final draft"` |
-| `!word` | exclude names containing word | `ff report !old` |
-| `*.ext` / `ext:a;b` | extension filter | `ff ext:jpg;png` |
-| `type:file` / `type:dir` | files or folders only | `ff node_modules type:dir` |
-| `size:>N` / `size:<N` | size, units KB MB GB | `ff size:>1GB` |
-| `mod:<7d` / `mod:>1y` | modified within / older than (s m h d w y) | `ff mod:<2d *.md` |
-| `in:path` | limit to a folder | `ff in:~/Projects Cargo.toml` |
+| `word` | names containing it, ignoring case; every word must match | `ff tax 2025` |
+| `"exact phrase"` | names containing the phrase | `ff "final draft"` |
+| `!word` | leaves out names containing it | `ff report !old` |
+| `*.ext` / `ext:a;b` | those extensions | `ff ext:jpg;png` |
+| `type:file` / `type:dir` | only files or only folders | `ff node_modules type:dir` |
+| `size:>N` / `size:<N` | by size, units KB MB GB | `ff size:>1GB` |
+| `mod:<7d` / `mod:>1y` | changed within / older than (s m h d w y) | `ff 'mod:<2d' ext:md` |
+| `in:folder` | only under that folder | `ff in:~/Projects Cargo.toml` |
 
-Flags: `--limit N` (default 50), `--sort score|size|mtime`.
+Flags: `--limit N`, `--sort score|size|mtime`, `--json` and `-0` for scripts. `ff big` and `ff recent` are shortcuts for the two questions everyone asks.
 
-## AI agents (MCP)
+**In the picker** (`ff -i`): ↑/↓ move · Enter prints the path · Tab cycles All / Files / Folders / Recent · Ctrl-O open · Ctrl-R reveal in Finder · Ctrl-Y copy · Ctrl-L Quick Look · Esc quit.
 
-Claude Code:
+## The menu bar app
+
+Press **⌥Space** from anywhere and a search panel drops in. Type to search, switch between **All · Files · Folders · Recent · Large** with Tab, **Enter** opens, **⌘Enter** reveals in Finder, **⌘Y** opens Quick Look, **⌘C** copies the path. The panel follows your light or dark theme, and you can change the hotkey in Settings.
+
+## Let your AI agent find files 🤖
 
 ```sh
 claude mcp add --scope user ferret -- ff mcp
 ```
 
-Cursor (`~/.cursor/mcp.json`):
+<details>
+<summary>Cursor and other MCP clients</summary>
 
 ```json
 {
@@ -74,22 +114,20 @@ Cursor (`~/.cursor/mcp.json`):
   }
 }
 ```
+</details>
 
-Tools: `find_files` (query + sort by relevance, size or newest) and `file_info`.
+Now "find the contract PDF I downloaded last week" just works. Ferret gives agents one tool, `find_files` (sorted by relevance, size or newest), plus `file_info`. Measured in Claude Code, 5 runs each with a warm cache:
 
-Measured in Claude Code, "find the business plan PDF I saved recently", 5 runs, warm cache:
-
-| | Shell tools (find / mdfind) | Ferret MCP |
+| "Find the business plan PDF I saved recently" | Shell tools (`find`, `mdfind`) | Ferret |
 |---|---|---|
-| Cost per search | $0.096 | $0.016 |
-| Time | 81.5 s | 5.3 s |
-| Turns | 5.2 | 2 |
+| Time | 81.5 s | **5.3 s** |
+| Turns | 5.2 | **2** |
+| Cost per search | $0.096 | **$0.016** |
 
-### Guardrails
+### Your privacy comes first
 
-- **Names and metadata only.** Ferret never reads file contents; it returns paths, sizes and dates.
-- **At most 100 results** per call.
-- **Allow / deny list** in `~/.config/ferret/config.toml`. Allow defaults to your home folder:
+- **Names and metadata only.** Ferret never reads or returns file contents.
+- **You choose what agents can see.** By default, only your home folder. Narrow it in `~/.config/ferret/config.toml`:
 
   ```toml
   [mcp]
@@ -97,45 +135,49 @@ Measured in Claude Code, "find the business plan PDF I saved recently", 5 runs, 
   deny  = ["~/Documents/Private"]
   ```
 
-- **Default denies, always on** (cannot be allowed back): `~/.ssh`, `~/.gnupg`, `~/.aws`, `~/.kube`, `~/.docker/config.json`, `~/.netrc`, `~/.config/gh`, `~/Library/Keychains`, `~/Library/Messages`, `~/Library/Mail`, `~/Library/Cookies`, `~/Library/Safari`, and Chrome, Firefox, Brave and Arc profile folders.
-- **Every call is logged** to `~/Library/Logs/ferret/mcp.log`.
+- **Secrets are always off limits**, whatever the config says: `~/.ssh`, `~/.gnupg`, `~/.aws`, `~/.kube`, `~/.docker/config.json`, `~/.netrc`, `~/.config/gh`, Keychains, Messages, Mail, Cookies, Safari, and Chrome, Firefox, Brave and Arc profiles.
+- **At most 100 results per call**, and every call is logged to `~/Library/Logs/ferret/mcp.log`, so you can see exactly what your agent looked for.
 
 ## Full Disk Access
 
-macOS hides some folders (Mail, Messages, Safari, other apps' containers) from processes without Full Disk Access. Without it Ferret still works, but those folders are missing from the index. To grant it: System Settings → Privacy & Security → Full Disk Access → add `ferretd` (and your terminal if you run `ff index` directly). `ff doctor` reports what is missing.
+macOS keeps some folders (Mail, Messages, Safari, other apps' data) private until you allow access. Ferret works without it; those folders just won't be in your results. To include them: **System Settings → Privacy & Security → Full Disk Access → add `ferretd`**. `ff doctor` shows the exact path.
 
-## GUI
+## How fast is it?
 
-`ferret` opens a search window: type to search, ↑/↓ to move, Enter opens, Cmd-Enter reveals in Finder, Esc clears. It shares the same index as `ff` (daemon first, snapshot fallback).
+Measured on the author's Mac (Apple Silicon, internal SSD), about 4.1 million files and folders:
 
-## Benchmarks
-
-Measured on the author's Mac (Apple Silicon, internal SSD):
-
-| What | Result |
+| | |
 |---|---|
-| Full scan of `/` (~4.1M entries, `getattrlistbulk`, 8 threads) | **87–96 s** (was 158–215 s with readdir + stat) |
-| Peak memory during the scan | 85–89 MB (was ~400 MB) |
-| Index in memory | ~298 MB |
-| Snapshot on disk | 286 MB |
-| Restart from snapshot | ~0.65 s until searchable |
-| Substring search, 2M-entry synthetic index (criterion) | 17–18 ms |
+| Search over the whole disk | **~20–40 ms** end to end |
+| New or changed files visible | **under 1 s** |
+| Restart until searchable | **~0.65 s** (loads a snapshot) |
+| First full scan of `/` | ~90 s, once |
 | Daemon idle CPU | ~0.4% |
+| Index in memory | ~300 MB |
 
-**Known gap:** the first full scan still takes ~90 s, short of the 30 s goal; almost all of it is kernel time listing ~880K folders. After that, FSEvents keeps the index current and restarts load the snapshot, so this is a one-time cost.
+Against the tools you already have, searching for `invoice`:
 
-### vs `mdfind -name` and `find`
-
-Same name query, daemon running, measured with `hyperfine` (5 runs; `find` timed once):
-
-| Command | Time | Matches | Searches |
+| Command | Time | Matches | Looks at |
 |---|---|---|---|
-| `ff invoice` | 37 ms ± 10 ms | 145 | the whole disk, including hidden and system folders |
-| `mdfind -name invoice` | 31 ms ± 2 ms | 70 | only what Spotlight indexes (skips hidden folders, `node_modules`, `.git`, many caches) |
+| `ff invoice` | **37 ms** | **145** | the whole disk, hidden and system folders included |
+| `mdfind -name invoice` | 31 ms | 70 | only what Spotlight indexes |
 | `find ~ -iname '*invoice*'` | 99 s | | your home folder only |
 
-`ff` is as fast as Spotlight while seeing everything on disk, and about 2,700× faster than `find`.
+Spotlight speed, seeing twice as much, and about 2,700× faster than `find`.
+
+## How it works
+
+One flat array of nodes and one buffer of names, NFC-normalized and searched on every core. A daemon owns the index and follows FSEvents; the CLI, the picker, the menu bar app and the MCP server are all thin clients of one small JSON socket protocol. The first scan lists each folder with `getattrlistbulk`, which gets names, sizes and dates in a single call. Curious? [CONTRIBUTING.md](CONTRIBUTING.md) maps out the crates.
+
+## Contributing
+
+Bug reports, ideas and pull requests are all very welcome 💛 Start with [CONTRIBUTING.md](CONTRIBUTING.md). For anything security-related, see [SECURITY.md](SECURITY.md).
 
 ## License
 
-MIT, see [LICENSE](LICENSE).
+[MIT](LICENSE). Use it, fork it, ship it.
+
+<div align="center">
+<br>
+<sub>Made with ❤️ and a lot of curiosity by <a href="https://github.com/nimiology">@nimiology</a>, for everyone who has ever lost a file.</sub>
+</div>

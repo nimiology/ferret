@@ -372,7 +372,7 @@ fn run_search(
         .map_or(0, |d| d.as_secs() as i64);
     for h in &found.hits {
         let path = if tty {
-            highlight(&h.path, &q.words)
+            highlight(&tilde(&h.path), &q.words)
         } else {
             h.path.clone()
         };
@@ -390,12 +390,30 @@ fn run_search(
             format!(" · {} files indexed", fmt_count(n as u64))
         });
         eprintln!(
-            "{DIM}{} matches · {} ms{tail}{RESET}",
+            "{DIM}{} matches · {}{tail}{RESET}",
             found.total,
-            found.took_us / 1000
+            fmt_ms(found.took_us)
         );
     }
     Ok(())
+}
+
+/// `/Users/me/x` -> `~/x` for display on a terminal; pipes keep absolute paths.
+pub fn tilde(path: &str) -> String {
+    tilde_with(path, &std::env::var("HOME").unwrap_or_default())
+}
+
+fn tilde_with(path: &str, home: &str) -> String {
+    if home.is_empty() || home == "/" {
+        return path.to_string();
+    }
+    // The index may store the /private-resolved form of a /tmp or /var home.
+    for h in [home.to_string(), format!("/private{home}")] {
+        if let Some(rest) = path.strip_prefix(h.as_str()).filter(|r| r.starts_with('/')) {
+            return format!("~{rest}");
+        }
+    }
+    path.to_string()
 }
 
 /// Split at the file name; mark bytes of the name that match any query word (ASCII case-insensitive).
@@ -471,7 +489,19 @@ pub fn fmt_bytes(n: u64) -> String {
     match n {
         0..=1023 => format!("{n} B"),
         1024..=1_048_575 => format!("{:.1} KiB", n as f64 / 1024.0),
-        _ => format!("{:.1} MiB", n as f64 / 1_048_576.0),
+        1_048_576..=1_073_741_823 => format!("{:.1} MiB", n as f64 / 1_048_576.0),
+        _ => format!("{:.1} GiB", n as f64 / 1_073_741_824.0),
+    }
+}
+
+/// 412 -> "0.4 ms", 12_345 -> "12 ms"
+pub fn fmt_ms(us: u64) -> String {
+    if us < 100 {
+        "<0.1 ms".into()
+    } else if us < 10_000 {
+        format!("{:.1} ms", us as f64 / 1000.0)
+    } else {
+        format!("{} ms", us / 1000)
     }
 }
 
@@ -490,6 +520,24 @@ mod tests {
         assert_eq!(fmt_count(2_100_000), "2.1M");
         assert_eq!(fmt_count(1_000), "1K");
         assert_eq!(fmt_count(12_400_000), "12M");
+    }
+
+    #[test]
+    fn sizes_and_times() {
+        assert_eq!(fmt_bytes(9 << 30), "9.0 GiB");
+        assert_eq!(fmt_bytes(1200 << 20), "1.2 GiB");
+        assert_eq!(fmt_bytes(5 << 20), "5.0 MiB");
+        assert_eq!(fmt_ms(412), "0.4 ms");
+        assert_eq!(fmt_ms(7), "<0.1 ms");
+        assert_eq!(fmt_ms(12_345), "12 ms");
+    }
+
+    #[test]
+    fn tilde_shortens_home_only() {
+        assert_eq!(tilde_with("/Users/me/a.pdf", "/Users/me"), "~/a.pdf");
+        assert_eq!(tilde_with("/Users/meow/a", "/Users/me"), "/Users/meow/a");
+        assert_eq!(tilde_with("/private/tmp/h/x", "/tmp/h"), "~/x");
+        assert_eq!(tilde_with("/etc/hosts", ""), "/etc/hosts");
     }
 
     #[test]

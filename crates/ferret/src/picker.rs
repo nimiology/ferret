@@ -281,7 +281,7 @@ fn event_loop(
                 });
             let msg = match &st.error {
                 Some(e) => e.clone(),
-                None => format!("{} matches · {} ms", st.total, st.took_us / 1000),
+                None => format!("{} matches · {}", st.total, crate::fmt_ms(st.took_us)),
             };
             let mut spans: Vec<Span> = vec![Span::raw(msg).dim(), Span::raw("  ")];
             spans.extend(tabs);
@@ -339,17 +339,18 @@ fn event_loop(
     }
 }
 
-fn row<'a>(path: &'a str, words: &[String], selected: bool) -> Line<'a> {
-    let (parent, name, hit) = match_mask(path, words);
+fn row(path: &str, words: &[String], selected: bool) -> Line<'static> {
+    let shown = crate::tilde(path);
+    let (parent, name, hit) = match_mask(&shown, words);
     let mut spans = vec![Span::styled(
-        parent,
+        parent.to_string(),
         Style::new().add_modifier(Modifier::DIM),
     )];
     for (t, on) in runs(name, &hit) {
         spans.push(if on {
-            Span::styled(t, Style::new().fg(Color::Indexed(208)).bold())
+            Span::styled(t.to_string(), Style::new().fg(Color::Indexed(208)).bold())
         } else {
-            Span::raw(t)
+            Span::raw(t.to_string())
         });
     }
     let line = Line::from(spans);
