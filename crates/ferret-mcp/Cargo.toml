@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+unicode-normalization = "0.1"
 ferret-core = { path = "../ferret-core" }
 rmcp = { version = "3.5", features = ["server", "transport-io", "macros"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-std", "sync"] }

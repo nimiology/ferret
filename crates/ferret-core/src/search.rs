@@ -46,15 +46,21 @@ fn now_secs() -> i64 {
 
 /// Node ids of directories whose full path equals `under`. None = no restriction.
 fn under_ids(index: &Index, under: &str) -> Option<Vec<u32>> {
-    if under == "/" {
+    // The root node's name is its whole path; `in:` the root (or above it) restricts nothing.
+    if index.is_empty() || std::path::Path::new(index.name(0)).starts_with(under) {
         return None;
     }
-    let last = under.rsplit('/').next().unwrap_or(under);
+    // APFS is case-insensitive by default, so match the folder case-insensitively.
+    let under = under.to_lowercase();
+    let last = under.rsplit('/').next().unwrap_or(&under);
     Some(
         (0..index.len() as u32)
             .into_par_iter()
             .filter(|&i| {
-                index.nodes[i as usize].kind == Kind::Dir && index.is_live(i) && index.name(i) == last && index.path(i) == under
+                index.nodes[i as usize].kind == Kind::Dir
+                    && index.is_live(i)
+                    && index.name_lower(i) == last.as_bytes()
+                    && index.path(i).to_lowercase() == under
             })
             .collect(),
     )
@@ -296,5 +302,17 @@ mod tests {
     fn sort_by_size() {
         let r = search(&idx(), &parse("invoice type:file").unwrap(), 2, Sort::Size);
         assert_eq!(names(&r), ["MyInvoice.txt", "invoice.pdf"]);
+    }
+
+    #[test]
+    fn in_root_and_case_insensitive() {
+        assert!(run("photo in:/users/ME/documents").total == 1, "case-insensitive in:");
+        let mut ix = Index::default();
+        let r = ix.push(NO_PARENT, "/tmp/root", Kind::Dir, 0, 0);
+        ix.push(r, "a.txt", Kind::File, 0, 0);
+        for under in ["in:/tmp/root", "in:/tmp"] {
+            let q = parse(&format!("txt {under}")).unwrap();
+            assert_eq!(search(&ix, &q, 10, Sort::Score).total, 1, "{under}");
+        }
     }
 }

@@ -16,7 +16,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 pub struct Shared {
     index: RwLock<Index>,
@@ -69,9 +69,14 @@ fn save(sh: &Shared) {
     sh.dirty.store(false, Relaxed);
     let start = Instant::now();
     let meta = Meta { last_event_id: sh.last_event_id.load(Relaxed), volume_uuid: sh.volume_uuid.clone() };
-    let ix = sh.index.read();
-    match snapshot::save_with(&ix, &meta, &sh.snapshot) {
-        Ok(()) => info!(entries = ix.live_count(), ms = start.elapsed().as_millis() as u64, "snapshot saved"),
+    // Encode under the read lock, write after releasing it: a queued writer would otherwise
+    // block every search for the whole disk write (parking_lot is writer-fair).
+    let encoded = {
+        let ix = sh.index.read();
+        snapshot::encode(&ix, &meta).map(|b| (b, ix.live_count()))
+    };
+    match encoded.and_then(|(b, n)| snapshot::write_bytes(&b, &sh.snapshot).map(|_| n)) {
+        Ok(n) => info!(entries = n, ms = start.elapsed().as_millis() as u64, "snapshot saved"),
         Err(e) => {
             sh.dirty.store(true, Relaxed);
             error!("snapshot save failed: {e}");
@@ -107,6 +112,7 @@ fn writer(sh: Arc<Shared>, rx: Receiver<fsevents::Event>, overflow: fsevents::Ov
     use fsevents::{KERNEL_DROPPED, MUST_SCAN_SUB_DIRS, USER_DROPPED};
     let mut dirs: HashSet<PathBuf> = HashSet::new();
     let mut subtrees: HashSet<PathBuf> = HashSet::new();
+    let mut paths: HashSet<PathBuf> = HashSet::new();
     let mut max_id = 0u64;
     loop {
         let mut deadline = None;
@@ -133,27 +139,44 @@ fn writer(sh: Arc<Shared>, rx: Receiver<fsevents::Event>, overflow: fsevents::Ov
                 subtrees.insert(path);
             } else if path == sh.root {
                 dirs.insert(path);
-            } else if let Some(parent) = path.parent() {
-                dirs.insert(parent.to_path_buf());
+            } else {
+                // File-level event: one lstat of this path, not a re-list of its parent.
+                paths.insert(path);
             }
         }
-        if let Some((p, id)) = overflow.lock().take() {
-            warn!(ancestor = %p.display(), "event channel overflowed; rescanning subtree");
+        if let Some((overflowed, id)) = overflow.lock().take() {
+            warn!(dirs = overflowed.len(), "event channel overflowed; re-listing affected folders");
             max_id = max_id.max(id);
-            subtrees.insert(if p.starts_with(&sh.root) { p } else { sh.root.clone() });
+            for d in overflowed {
+                if d == Path::new("/") || !d.starts_with(&sh.root) {
+                    subtrees.insert(sh.root.clone());
+                } else {
+                    dirs.insert(d);
+                }
+            }
         }
-        // shortcut: past 100k pending dirs, fall back to rescanning the whole root.
-        if dirs.len() > 100_000 {
+        // shortcut: past 100k pending entries, fall back to rescanning the whole root.
+        if dirs.len() + paths.len() > 100_000 {
             dirs.clear();
+            paths.clear();
             subtrees.insert(sh.root.clone());
         }
         // Events seen during a full scan are applied after the swap.
-        if sh.indexing.load(Relaxed) || (dirs.is_empty() && subtrees.is_empty()) {
+        if sh.indexing.load(Relaxed) || (dirs.is_empty() && subtrees.is_empty() && paths.is_empty()) {
             continue;
         }
         let start = Instant::now();
-        let n = dirs.len() + subtrees.len();
+        let n = dirs.len() + subtrees.len() + paths.len();
         dirs.retain(|d| !subtrees.iter().any(|s| d.starts_with(s)));
+        paths.retain(|p| !subtrees.iter().any(|s| p.starts_with(s)) && !p.parent().is_some_and(|d| dirs.contains(d)));
+        if !paths.is_empty() {
+            let mut ix = sh.index.write();
+            for p in paths.drain() {
+                if let Err(e) = scan::apply_path(&mut ix, &p) {
+                    debug!(path = %p.display(), "apply failed: {e}");
+                }
+            }
+        }
         for d in dirs.drain() {
             if let Err(e) = scan::rescan_dir(&mut sh.index.write(), &d) {
                 warn!(dir = %d.display(), "rescan failed: {e}");

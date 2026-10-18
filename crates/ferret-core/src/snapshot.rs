@@ -29,15 +29,27 @@ pub fn save(index: &Index, path: &Path) -> Result<()> {
 
 /// `save` plus daemon metadata.
 pub fn save_with(index: &Index, meta: &Meta, path: &Path) -> Result<()> {
+    write_bytes(&encode(index, meta)?, path)
+}
+
+/// Serialize in memory, so a caller holding a lock can release it before the slow disk write.
+pub fn encode(index: &Index, meta: &Meta) -> Result<Vec<u8>> {
+    let mut buf = Vec::with_capacity(index.names.len() * 3 + index.nodes.len() * 40);
+    buf.extend_from_slice(MAGIC);
+    buf.extend_from_slice(&VERSION.to_le_bytes());
+    bincode::serialize_into(&mut buf, meta)?;
+    bincode::serialize_into(&mut buf, index)?;
+    Ok(buf)
+}
+
+/// Write `encode` output atomically (temp file + rename).
+pub fn write_bytes(bytes: &[u8], path: &Path) -> Result<()> {
     let dir = path.parent().unwrap_or(Path::new("."));
     fs::create_dir_all(dir)?;
     let tmp = path.with_extension(format!("tmp.{}", std::process::id()));
     let res = (|| {
         let mut w = BufWriter::new(File::create(&tmp)?);
-        w.write_all(MAGIC)?;
-        w.write_all(&VERSION.to_le_bytes())?;
-        bincode::serialize_into(&mut w, meta)?;
-        bincode::serialize_into(&mut w, index)?;
+        w.write_all(bytes)?;
         w.into_inner().map_err(|e| e.into_error())?.sync_all()?;
         fs::rename(&tmp, path)?;
         Ok(())

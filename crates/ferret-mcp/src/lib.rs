@@ -85,12 +85,19 @@ fn expand_tilde(s: &str, home: &Path) -> PathBuf {
     }
 }
 
-/// Lexical form plus the symlink-resolved form when it differs (e.g. /var -> /private/var).
+/// NFC + lowercase: APFS is case-insensitive and normalization-insensitive by default,
+/// so ~/Secrets and ~/secrets (or NFD vs NFC names) are the same folder and must match.
+fn fold(p: &Path) -> PathBuf {
+    use unicode_normalization::UnicodeNormalization;
+    PathBuf::from(p.to_string_lossy().nfc().collect::<String>().to_lowercase())
+}
+
+/// Lexical form plus the symlink-resolved form when it differs (e.g. /var -> /private/var), folded.
 fn root_forms(p: PathBuf) -> Vec<PathBuf> {
     let Some(p) = normalize(&p) else { return vec![] };
     match std::fs::canonicalize(&p) {
-        Ok(c) if c != p => vec![p, c],
-        _ => vec![p],
+        Ok(c) if c != p => vec![fold(&p), fold(&c)],
+        _ => vec![fold(&p)],
     }
 }
 
@@ -115,9 +122,10 @@ impl Policy {
         Ok(Self::new(home, cfg.mcp.allow, cfg.mcp.deny))
     }
 
-    /// Lexical, component-wise check. Deny always wins.
+    /// Lexical, component-wise, case- and normalization-insensitive check. Deny always wins.
     pub fn allows(&self, p: &Path) -> bool {
         let Some(p) = normalize(p) else { return false };
+        let p = fold(&p);
         self.allow.iter().any(|a| p.starts_with(a)) && !self.deny.iter().any(|d| p.starts_with(d))
     }
 }

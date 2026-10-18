@@ -30,6 +30,15 @@ fn prefix_is_component_wise() {
 }
 
 #[test]
+fn deny_ignores_case_and_unicode_form() {
+    let p = Policy::new(&home(), None, vec!["~/Secrets".into(), "~/Caf\u{e9}".into()]);
+    assert!(!p.allows(Path::new("/Users/x/.SSH/id_rsa")));
+    assert!(!p.allows(Path::new("/Users/x/secrets/a")));
+    assert!(!p.allows(Path::new("/Users/x/Cafe\u{301}/menu.pdf")), "NFD path vs NFC deny");
+    assert!(p.allows(Path::new("/Users/x/Documents/a")));
+}
+
+#[test]
 fn dotdot_is_resolved_lexically() {
     let p = Policy::new(&home(), None, vec![]);
     assert!(!p.allows(Path::new("/Users/x/Documents/../.ssh/id_rsa")));

@@ -7,6 +7,7 @@ use std::ffi::{c_char, c_void, CStr, OsStr};
 use std::ptr::NonNull;
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
+use std::collections::HashSet;
 use std::sync::mpsc::{sync_channel, Receiver, SyncSender, TrySendError};
 use std::sync::Arc;
 
@@ -20,8 +21,10 @@ pub struct Event {
     pub id: u64,
 }
 
-/// Common ancestor of events dropped because the channel was full, and their max id.
-pub type Overflow = Arc<Mutex<Option<(PathBuf, u64)>>>;
+/// Parent dirs of events dropped because the channel was full, and their max id.
+/// Past OVERFLOW_CAP dirs, the root itself is recorded and the writer rescans everything.
+pub type Overflow = Arc<Mutex<Option<(HashSet<PathBuf>, u64)>>>;
+pub const OVERFLOW_CAP: usize = 100_000;
 
 struct Ctx {
     tx: SyncSender<Event>,
@@ -30,10 +33,6 @@ struct Ctx {
 
 pub fn current_event_id() -> u64 {
     unsafe { fs::FSEventsGetCurrentEventId() }
-}
-
-fn common_ancestor(a: &Path, b: &Path) -> PathBuf {
-    a.components().zip(b.components()).take_while(|(x, y)| x == y).map(|(x, _)| x).collect()
 }
 
 unsafe extern "C-unwind" fn callback(
@@ -56,17 +55,20 @@ unsafe extern "C-unwind" fn callback(
         // Never block the run loop: on a full channel remember only where to rescan.
         if let Err(TrySendError::Full(ev)) = ctx.tx.try_send(Event { path, flags, id }) {
             let mut o = ctx.overflow.lock();
-            *o = Some(match o.take() {
-                None => (ev.path, ev.id),
-                Some((a, max)) => (common_ancestor(&a, &ev.path), max.max(ev.id)),
-            });
+            let (dirs, max) = o.get_or_insert_with(Default::default);
+            *max = (*max).max(ev.id);
+            if dirs.len() < OVERFLOW_CAP {
+                dirs.insert(ev.path.parent().map_or(ev.path.clone(), Path::to_path_buf));
+            } else {
+                dirs.insert(PathBuf::from("/"));
+            }
         }
     }
 }
 
 /// Start watching `root` from event id `since` on a dedicated thread.
 pub fn start(root: &Path, since: u64) -> (Receiver<Event>, Overflow) {
-    let (tx, rx) = sync_channel(4096);
+    let (tx, rx) = sync_channel(65_536);
     let overflow: Overflow = Arc::default();
     let ctx = Ctx { tx, overflow: overflow.clone() };
     let root = root.to_string_lossy().into_owned();
@@ -99,14 +101,4 @@ pub fn start(root: &Path, since: u64) -> (Receiver<Event>, Overflow) {
         })
         .expect("spawn fsevents thread");
     (rx, overflow)
-}
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn common_ancestor() {
-        use std::path::Path;
-        assert_eq!(super::common_ancestor(Path::new("/a/b/c"), Path::new("/a/b/d/e")), Path::new("/a/b"));
-        assert_eq!(super::common_ancestor(Path::new("/x"), Path::new("/y")), Path::new("/"));
-    }
 }

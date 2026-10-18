@@ -195,6 +195,41 @@ pub fn rescan_dir(ix: &mut Index, dir: &Path) -> Result<Vec<PathBuf>> {
     Ok(subdirs)
 }
 
+/// Apply one changed path with a single lstat: add, update or remove just that entry
+/// (a new directory brings its subtree). Falls back to `rescan_dir` on the parent when
+/// the parent isn't indexed yet.
+pub fn apply_path(ix: &mut Index, path: &Path) -> Result<()> {
+    let (Some(parent), Some(raw)) = (path.parent(), path.file_name()) else {
+        return rescan_dir(ix, path).map(|_| ());
+    };
+    if SKIP.iter().any(|s| path == Path::new(s)) {
+        return Ok(());
+    }
+    let Some(pid) = ix.find(parent).filter(|&p| ix.nodes[p as usize].kind == Kind::Dir) else {
+        return rescan_dir(ix, parent).map(|_| ());
+    };
+    let name = nfc(raw);
+    let existing = ix.children(pid).find(|&c| ix.name(c) == name);
+    match (std::fs::symlink_metadata(path), existing) {
+        (Ok(m), Some(c)) if ix.nodes[c as usize].kind == meta_of(&m).0 => {
+            let (_, size, mtime) = meta_of(&m);
+            let n = &mut ix.nodes[c as usize];
+            n.size = size;
+            n.mtime = mtime;
+        }
+        (Ok(m), prev) => {
+            if let Some(c) = prev {
+                ix.remove(c);
+            }
+            add_tree(ix, pid, path, &name, &m);
+        }
+        (Err(e), Some(c)) if e.kind() == io::ErrorKind::NotFound => ix.remove(c),
+        (Err(e), _) if e.kind() == io::ErrorKind::NotFound => {}
+        (Err(e), _) => return Err(e.into()),
+    }
+    Ok(())
+}
+
 /// `rescan_dir` on `dir` and every directory below it.
 pub fn rescan_subtree(ix: &mut Index, dir: &Path) -> Result<()> {
     let mut stack = vec![dir.to_path_buf()];
@@ -316,5 +351,36 @@ mod tests {
         fs::write(r.join("d/more"), b"").unwrap();
         rescan_dir(&mut ix, &r.join("d")).unwrap();
         assert!(ix.find(&r.join("d/more")).is_some());
+    }
+
+    #[test]
+    fn apply_path_single_entries() {
+        let t = tempfile::tempdir().unwrap();
+        let r = t.path().canonicalize().unwrap();
+        fs::write(r.join("a.txt"), b"1").unwrap();
+        let (mut ix, _) = scan(&r).unwrap();
+        // create, with a decomposed name as FSEvents may report it
+        fs::write(r.join("e\u{301}.md"), b"").unwrap();
+        apply_path(&mut ix, &r.join("e\u{301}.md")).unwrap();
+        assert!(ix.find(&r.join("\u{e9}.md")).is_some());
+        // modify
+        fs::write(r.join("a.txt"), b"12345").unwrap();
+        apply_path(&mut ix, &r.join("a.txt")).unwrap();
+        assert_eq!(ix.nodes[ix.find(&r.join("a.txt")).unwrap() as usize].size, 5);
+        // new dir brings its subtree
+        fs::create_dir_all(r.join("n/m")).unwrap();
+        fs::write(r.join("n/m/deep"), b"").unwrap();
+        apply_path(&mut ix, &r.join("n")).unwrap();
+        assert!(ix.find(&r.join("n/m/deep")).is_some());
+        // delete dir removes subtree; deleting twice is fine
+        fs::remove_dir_all(r.join("n")).unwrap();
+        apply_path(&mut ix, &r.join("n")).unwrap();
+        apply_path(&mut ix, &r.join("n")).unwrap();
+        assert!(ix.find(&r.join("n/m/deep")).is_none());
+        // parent not indexed yet -> falls back to rescanning the ancestor
+        fs::create_dir_all(r.join("x/y")).unwrap();
+        fs::write(r.join("x/y/z"), b"").unwrap();
+        apply_path(&mut ix, &r.join("x/y/z")).unwrap();
+        assert!(ix.find(&r.join("x/y/z")).is_some());
     }
 }

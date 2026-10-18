@@ -1568,6 +1568,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "toml 0.8.2",
+ "unicode-normalization",
 ]
 
 [[package]]

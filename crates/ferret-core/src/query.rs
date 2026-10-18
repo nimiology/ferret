@@ -131,14 +131,38 @@ fn expand_dir(v: &str) -> Result<String> {
     while p.len() > 1 && p.ends_with('/') {
         p.pop();
     }
+    // Resolve `.` and `..` lexically so in:~/a/../b matches the indexed path.
+    if p.starts_with('/') {
+        let mut parts: Vec<&str> = Vec::new();
+        for c in p.split('/') {
+            match c {
+                "" | "." => {}
+                ".." => {
+                    parts.pop();
+                }
+                c => parts.push(c),
+            }
+        }
+        p = format!("/{}", parts.join("/"));
+    }
     Ok(p)
 }
 
 pub fn parse(input: &str) -> Result<Query> {
+    use unicode_normalization::UnicodeNormalization;
+    // The index stores NFC; text pasted from macOS is often NFD.
+    let input: String = input.nfc().collect();
     let mut q = Query::default();
-    for (tok, quoted) in tokenize(input)? {
+    for (tok, quoted) in tokenize(&input)? {
         if quoted {
-            q.words.push(tok.to_lowercase());
+            // Quotes protect spaces, not the `!` / `in:` prefix: !"my draft", in:"~/My Folder".
+            if let Some(w) = tok.strip_prefix('!').filter(|w| !w.is_empty()) {
+                q.not_words.push(w.to_lowercase());
+            } else if let Some(d) = tok.strip_prefix("in:").filter(|d| !d.is_empty()) {
+                q.under = Some(expand_dir(d)?);
+            } else {
+                q.words.push(tok.to_lowercase());
+            }
             continue;
         }
         if let Some(w) = tok.strip_prefix('!') {
@@ -277,5 +301,18 @@ mod tests {
         assert_eq!(q.size, Some((Cmp::Gt, 1 << 20)));
         assert_eq!(q.modified_within, Some((Cmp::Lt, 30 * 86_400)));
         assert_eq!(q.under.as_deref(), Some("/Users"));
+    }
+
+    #[test]
+    fn bughunt_regressions() {
+        // quoted `!` excludes; quoted in: keeps spaces
+        let q = parse(r#"txt !"my draft" in:"/tmp/My Dir/""#).unwrap();
+        assert_eq!(q.words, ["txt"]);
+        assert_eq!(q.not_words, ["my draft"]);
+        assert_eq!(q.under.as_deref(), Some("/tmp/My Dir"));
+        // NFD input is normalized to NFC like the index
+        assert_eq!(parse("cafe\u{301}").unwrap().words, ["caf\u{e9}"]);
+        // `.` and `..` resolved
+        assert_eq!(parse("in:/a/b/../c/./d").unwrap().under.as_deref(), Some("/a/c/d"));
     }
 }
