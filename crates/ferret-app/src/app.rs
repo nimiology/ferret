@@ -218,13 +218,11 @@ impl App {
         std::thread::spawn(move || {
             let reply = match ferret_core::parse(&q) {
                 Ok(parsed) => {
-                    let mut counts = [0; 3];
-                    if counts_too {
-                        for (i, k) in [KindFilter::All, KindFilter::File, KindFilter::Dir].into_iter().enumerate() {
-                            counts[i] = fetch(&q, &parsed, k, SortArg::Score, 1, &snap).map_or(0, |r| r.0.total);
-                        }
-                    }
-                    let res = fetch(&q, &parsed, kind, sort, limit, &snap).map(|(r, live)| (r, live, counts));
+                    // One request: the reply's per-kind counts fill every tab.
+                    let res = fetch(&q, &parsed, kind, sort, limit, &snap).map(|(r, live)| {
+                        let counts = if counts_too { tab_counts(r.by_kind, parsed.kind) } else { [0; 3] };
+                        (r, live, counts)
+                    });
                     (gen, parsed.words, res)
                 }
                 Err(e) => (gen, Vec::new(), Err(e.to_string())),
@@ -1020,11 +1018,23 @@ fn choose(
     match daemon {
         Ok(Response { error: Some(e), .. }) => Err(e),
         Ok(r) => Ok((
-            SearchResult { hits: r.hits.into_iter().map(hit_from).collect(), total: r.total, took_us: r.took_us },
+            SearchResult {
+                hits: r.hits.into_iter().map(hit_from).collect(),
+                total: r.total,
+                by_kind: r.by_kind,
+                took_us: r.took_us,
+            },
             true,
         )),
         Err(_) => fallback().map(|r| (r, false)),
     }
+}
+
+/// [all, files, folders] from per-kind match counts, honouring a `type:` the user typed.
+fn tab_counts(by_kind: [usize; 3], typed: Option<Kind>) -> Counts {
+    let k = |kind: Kind| if typed.is_none_or(|t| t == kind) { by_kind[kind as usize] } else { 0 };
+    let (f, d, s) = (k(Kind::File), k(Kind::Dir), k(Kind::Symlink));
+    [f + d + s, f, d]
 }
 
 fn hit_from(h: HitOut) -> Hit {
@@ -1123,6 +1133,12 @@ mod tests {
     use super::*;
 
     #[test]
+    fn tab_counts_from_one_reply() {
+        assert_eq!(tab_counts([5, 2, 1], None), [8, 5, 2]);
+        assert_eq!(tab_counts([5, 2, 1], Some(Kind::Dir)), [2, 0, 2]);
+    }
+
+    #[test]
     fn formats() {
         assert_eq!(fmt_size(184 * 1024), "184 KB");
         assert_eq!(fmt_size(1536), "1.5 KB");
@@ -1166,7 +1182,7 @@ mod tests {
 
     #[test]
     fn daemon_vs_fallback() {
-        let fb = || Ok(SearchResult { hits: Vec::new(), total: 42, took_us: 1 });
+        let fb = || Ok(SearchResult { hits: Vec::new(), total: 42, took_us: 1, ..Default::default() });
         let ok = Response { total: 1, took_us: 5, hits: vec![out()], ..Default::default() };
         let (r, live) = choose(Ok(ok), || panic!("fallback must not run")).unwrap();
         assert!(live);

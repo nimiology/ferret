@@ -139,7 +139,7 @@ pub struct Ctx {
     pub log: PathBuf,
     /// Try the daemon socket first. Off in tests.
     pub daemon: bool,
-    index: OnceLock<Result<Index, String>>,
+    index: OnceLock<Index>,
 }
 
 impl Ctx {
@@ -175,15 +175,19 @@ impl Ctx {
             }
             query.kind = Some(w);
         }
-        let index = self
-            .index
-            .get_or_init(|| {
-                ferret_core::snapshot::load(&self.snapshot)
-                    .map_err(|e| format!("Ferret daemon is not running and no index snapshot could be read: {e}"))
-            })
-            .as_ref()?;
+        let index = self.index()?;
         let r = ferret_core::search(index, &query, limit, sort.into());
         Ok(r.hits.into_iter().map(|h| HitOut { path: h.path, kind: h.kind, size: h.size, mtime: h.mtime }).collect())
+    }
+
+    /// Cache only a successful load, so a snapshot written later (e.g. by `ff index`) is picked up.
+    fn index(&self) -> Result<&Index, String> {
+        if let Some(i) = self.index.get() {
+            return Ok(i);
+        }
+        let i = ferret_core::snapshot::load(&self.snapshot)
+            .map_err(|e| format!("Ferret daemon is not running and no index snapshot could be read: {e}"))?;
+        Ok(self.index.get_or_init(|| i))
     }
 
     /// Over-fetch, then drop anything outside the policy (and outside `under`), then cap.
@@ -195,7 +199,7 @@ impl Ctx {
         kind: KindFilter,
         under: Option<&Path>,
     ) -> Result<Vec<HitOut>, String> {
-        let limit = limit.unwrap_or(20).clamp(1, MAX_LIMIT);
+        let limit = limit.unwrap_or(10).clamp(1, MAX_LIMIT);
         let hits = self.engine_search(q, (limit * 4).min(MAX_FETCH), sort, kind)?;
         Ok(filter_hits(&self.policy, hits, under, limit))
     }
@@ -224,38 +228,6 @@ fn filter_hits(policy: &Policy, hits: Vec<HitOut>, under: Option<&Path>, limit: 
 fn log_line(ts: i64, tool: &str, args: &serde_json::Value, count: usize, took_ms: u128) -> String {
     serde_json::json!({ "timestamp": ts, "tool": tool, "args": args, "result_count": count, "took_ms": took_ms })
         .to_string()
-}
-
-/// Tokens we splice into a query must stay one token.
-fn safe_token(name: &str, v: &str) -> Result<(), String> {
-    if v.is_empty() || v.contains(|c: char| c.is_whitespace() || c == '"') {
-        return Err(format!("{name} must be a single word without spaces or quotes"));
-    }
-    Ok(())
-}
-
-/// `in:` only when the path tokenizes cleanly; `under` is always re-applied as a post-filter anyway.
-fn in_clause(under: Option<&Path>) -> String {
-    match under.and_then(|u| u.to_str()) {
-        Some(u) if !u.contains(|c: char| c.is_whitespace() || c == '"') => format!(" in:{u}"),
-        _ => String::new(),
-    }
-}
-
-fn recent_query(since: &str, ext: Option<&str>, under: Option<&Path>) -> Result<String, String> {
-    safe_token("since", since)?;
-    let mut q = format!("type:file mod:<{since}");
-    if let Some(e) = ext {
-        safe_token("ext", e)?;
-        q += &format!(" ext:{e}");
-    }
-    q += &in_clause(under);
-    ferret_core::parse(&q).map_err(|e| e.to_string())?;
-    Ok(q)
-}
-
-fn largest_query(under: Option<&Path>) -> String {
-    format!("type:file{}", in_clause(under))
 }
 
 // ---------- formatting ----------
@@ -296,11 +268,20 @@ fn fmt_time(secs: i64) -> String {
     format!("{y:04}-{m:02}-{d:02} {:02}:{:02}", rem / 3600, rem % 3600 / 60)
 }
 
-fn render(hits: &[HitOut]) -> String {
-    let mut s = format!("{} result{}\n", hits.len(), if hits.len() == 1 { "" } else { "s" });
+/// One line per hit, home shown as `~` (every token here is re-sent on later turns).
+fn render(hits: &[HitOut], home: &Path) -> String {
+    if hits.is_empty() {
+        return "no matches".into();
+    }
+    let home = home.to_string_lossy();
+    let mut s = String::new();
     for h in hits {
+        let path = match h.path.strip_prefix(home.as_ref()) {
+            Some(rest) if rest.starts_with('/') => format!("~{rest}"),
+            _ => h.path.clone(),
+        };
         let slash = if h.kind == Kind::Dir { "/" } else { "" };
-        s += &format!("{}{slash}  {}  {}\n", h.path, human_size(h.size), fmt_time(h.mtime));
+        s += &format!("{path}{slash}  {}  {}\n", human_size(h.size), fmt_time(h.mtime));
     }
     s
 }
@@ -336,31 +317,11 @@ fn file_info(ctx: &Ctx, path: &str) -> Result<String, String> {
 
 #[derive(Debug, Deserialize, serde::Serialize, schemars::JsonSchema)]
 pub struct SearchArgs {
-    /// Ferret query, e.g. `invoice *.pdf mod:<30d in:~/Documents`.
+    /// e.g. `invoice *.pdf mod:<30d in:~/Documents`
     pub query: String,
-    /// Max results, 1-100 (default 20).
-    pub limit: Option<usize>,
-    /// all (default), file or dir.
-    pub kind: Option<String>,
-}
-
-#[derive(Debug, Deserialize, serde::Serialize, schemars::JsonSchema)]
-pub struct RecentArgs {
-    /// Folder to look in, e.g. ~/Documents. Default: everything allowed.
-    pub under: Option<String>,
-    /// How far back, e.g. 2h, 7d (default 1d).
-    pub since: Option<String>,
-    /// Only this extension, e.g. pdf.
-    pub ext: Option<String>,
-    /// Max results, 1-100 (default 20).
-    pub limit: Option<usize>,
-}
-
-#[derive(Debug, Deserialize, serde::Serialize, schemars::JsonSchema)]
-pub struct LargestArgs {
-    /// Folder to look in, e.g. ~/Downloads. Default: everything allowed.
-    pub under: Option<String>,
-    /// Max results, 1-100 (default 20).
+    /// relevance (default), size, newest
+    pub sort: Option<String>,
+    /// 1-100, default 10
     pub limit: Option<usize>,
 }
 
@@ -397,49 +358,35 @@ impl FerretMcp {
     }
 }
 
-fn kind_arg(k: Option<&str>) -> Result<KindFilter, String> {
-    match k.unwrap_or("all") {
-        "all" => Ok(KindFilter::All),
-        "file" => Ok(KindFilter::File),
-        "dir" => Ok(KindFilter::Dir),
-        o => Err(format!("bad kind '{o}': use all, file or dir")),
+fn sort_arg(s: Option<&str>) -> Result<SortArg, String> {
+    match s.unwrap_or("relevance") {
+        "relevance" => Ok(SortArg::Score),
+        "size" => Ok(SortArg::Size),
+        "newest" => Ok(SortArg::Mtime),
+        o => Err(format!("bad sort '{o}': use relevance, size or newest")),
     }
 }
 
-fn hits_out(hits: Vec<HitOut>) -> (String, usize) {
-    (render(&hits), hits.len())
+/// Claude Code defers MCP tools behind ToolSearch, costing a whole extra turn; this opts out.
+fn always_load() -> rmcp::model::MetaObject {
+    let mut m = rmcp::model::MetaObject::new();
+    m.insert("anthropic/alwaysLoad".into(), true.into());
+    m
 }
 
 #[tool_router]
 impl FerretMcp {
-    #[tool(description = "Find files and folders by name using Ferret query syntax. Returns paths with size and modified date.")]
-    async fn search_files(&self, Parameters(a): Parameters<SearchArgs>) -> Result<String, String> {
-        let (q, limit, kind) = (a.query.clone(), a.limit, a.kind.clone());
-        self.call("search_files", a, move |ctx| {
-            let kind = kind_arg(kind.as_deref())?;
-            ctx.filtered(&q, limit, SortArg::Score, kind, None).map(hits_out)
-        })
-        .await
-    }
-
-    #[tool(description = "Recently modified files, newest first.")]
-    async fn recent_files(&self, Parameters(a): Parameters<RecentArgs>) -> Result<String, String> {
-        let (under, since, ext, limit) = (a.under.clone(), a.since.clone(), a.ext.clone(), a.limit);
-        self.call("recent_files", a, move |ctx| {
-            let under = under.map(|u| expand_tilde(&u, &ctx.home));
-            let q = recent_query(since.as_deref().unwrap_or("1d"), ext.as_deref(), under.as_deref())?;
-            ctx.filtered(&q, limit, SortArg::Mtime, KindFilter::File, under.as_deref()).map(hits_out)
-        })
-        .await
-    }
-
-    #[tool(description = "Biggest files first.")]
-    async fn largest_files(&self, Parameters(a): Parameters<LargestArgs>) -> Result<String, String> {
-        let (under, limit) = (a.under.clone(), a.limit);
-        self.call("largest_files", a, move |ctx| {
-            let under = under.map(|u| expand_tilde(&u, &ctx.home));
-            ctx.filtered(&largest_query(under.as_deref()), limit, SortArg::Size, KindFilter::File, under.as_deref())
-                .map(hits_out)
+    // Only this tool is loaded up front: its schema is re-sent on every turn.
+    #[tool(
+        meta = always_load(),
+        description = "Find files/folders on this Mac by name, recursively. Query: words (all must match), \"phrase\", !exclude, *.pdf, type:file|dir, size:>100MB, mod:<7d (changed within; s m h d w y), in:~/folder. Out: path size modified(UTC)."
+    )]
+    async fn find_files(&self, Parameters(a): Parameters<SearchArgs>) -> Result<String, String> {
+        let (q, limit, sort) = (a.query.clone(), a.limit, a.sort.clone());
+        self.call("find_files", a, move |ctx| {
+            let sort = sort_arg(sort.as_deref())?;
+            let hits = ctx.filtered(&q, limit, sort, KindFilter::All, None)?;
+            Ok((render(&hits, &ctx.home), hits.len()))
         })
         .await
     }
@@ -454,7 +401,7 @@ impl FerretMcp {
 // The macro only accepts a string literal here.
 #[tool_handler(
     name = "ferret",
-    instructions = "Ferret finds files on this Mac by name and metadata (never contents). Query syntax for search_files: plain words must all appear in the name (case-insensitive); \"exact phrase\"; !word excludes; *.pdf or ext:pdf;jpg filters extensions; type:file / type:dir; size:>100MB, size:<1KB; mod:<7d (changed within), mod:>1y (older than), units s m h d w y; in:~/Projects limits to a folder. Results are limited to folders the user allowed; private folders (keys, mail, browsers) are never shown. Dates are UTC."
+    instructions = "Instant file-name search over the whole Mac. Prefer find_files over find/mdfind/ls."
 )]
 impl ServerHandler for FerretMcp {}
 

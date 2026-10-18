@@ -260,6 +260,7 @@ fn handle(sh: &Shared, line: &str) -> Response {
             let r = ferret_core::search(&sh.index.read(), &query, limit.min(10_000), sort.into());
             resp.took_us = r.took_us;
             resp.total = r.total;
+            resp.by_kind = r.by_kind;
             resp.hits =
                 r.hits.into_iter().map(|h| HitOut { path: h.path, kind: h.kind, size: h.size, mtime: h.mtime }).collect();
         }
@@ -286,6 +287,9 @@ async fn serve_conn(sh: Arc<Shared>, stream: UnixStream) -> std::io::Result<()> 
 fn bind(path: &Path) -> std::io::Result<UnixListener> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
+        // A 0700 folder closes the gap between bind() and the socket's own chmod below.
+        // Best effort: a shared --socket dir like /tmp isn't ours to chmod.
+        let _ = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700));
     }
     if std::os::unix::net::UnixStream::connect(path).is_ok() {
         return Err(std::io::Error::new(std::io::ErrorKind::AddrInUse, "another ferretd is already listening"));
@@ -320,7 +324,7 @@ fn main() {
             drop((ix, meta));
             None
         }
-        // An empty uuid means the snapshot came from `ff index`: trust it, follow events from now.
+        // An empty uuid means the snapshot came from `ff index`: see `since` below.
         Ok((_, meta)) if !meta.volume_uuid.is_empty() && meta.volume_uuid != uuid => {
             warn!("volume UUID changed; rescanning");
             None
@@ -334,6 +338,7 @@ fn main() {
     let need_scan = loaded.is_none();
     let (index, meta) = loaded.unwrap_or_default();
     info!(entries = index.live_count(), ms = start.elapsed().as_millis() as u64, "snapshot loaded");
+    // `ff index` stores the event id from just before its scan, so changes since are replayed.
     let since = if meta.last_event_id > 0 { meta.last_event_id } else { fsevents::current_event_id() };
     let sh = Arc::new(Shared {
         index: RwLock::new(index),

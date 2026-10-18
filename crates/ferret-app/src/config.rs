@@ -47,16 +47,19 @@ pub fn read_app(text: &str) -> AppConfig {
     }
 }
 
-/// Replace only the [app] table; every other table ([mcp], …) is kept.
-pub fn write_app(text: &str, cfg: &AppConfig) -> Result<String, toml::de::Error> {
-    let mut table = text.parse::<toml::Table>()?;
-    let mut app = toml::Table::new();
-    app.insert("hotkey".into(), cfg.hotkey.clone().into());
-    app.insert("excluded".into(), toml::Value::Array(cfg.excluded.iter().map(|s| s.clone().into()).collect()));
-    app.insert("external_drives".into(), cfg.external_drives.into());
-    app.insert("launch_at_login".into(), cfg.launch_at_login.into());
-    table.insert("app".into(), app.into());
-    Ok(toml::to_string(&table).expect("table serializes"))
+/// Replace only the [app] keys; every other table, comment and layout is kept as written.
+pub fn write_app(text: &str, cfg: &AppConfig) -> Result<String, toml_edit::TomlError> {
+    use toml_edit::{value, Array, DocumentMut, Item, Table};
+    let mut doc = text.parse::<DocumentMut>()?;
+    if !doc.contains_table("app") {
+        doc["app"] = Item::Table(Table::new());
+    }
+    let app = &mut doc["app"];
+    app["hotkey"] = value(cfg.hotkey.as_str());
+    app["excluded"] = value(cfg.excluded.iter().map(String::as_str).collect::<Array>());
+    app["external_drives"] = value(cfg.external_drives);
+    app["launch_at_login"] = value(cfg.launch_at_login);
+    Ok(doc.to_string())
 }
 
 pub fn load() -> AppConfig {
@@ -73,7 +76,10 @@ pub fn save(cfg: &AppConfig) -> io::Result<()> {
     // Refuse to overwrite a file we can't parse: that would drop the user's other tables.
     let new = write_app(&old, cfg).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
     std::fs::create_dir_all(path.parent().unwrap())?;
-    std::fs::write(path, new)
+    // Temp file + rename: a crash mid-write never leaves a truncated config.
+    let tmp = path.with_extension("toml.tmp");
+    std::fs::write(&tmp, new)?;
+    std::fs::rename(tmp, path)
 }
 
 /// "Option+Space" -> HotKey. Accepts what `format_hotkey` writes plus global-hotkey's own names.
@@ -180,12 +186,13 @@ mod tests {
 
     #[test]
     fn app_table_round_trip_keeps_mcp() {
-        let old = "[mcp]\ndeny = [\"~/.ssh\"]\n\n[app]\nhotkey = \"Command+K\"\n";
+        let old = "# my notes\n[mcp]\ndeny = [\"~/.ssh\"] # keep keys out\n\n[app]\nhotkey = \"Command+K\"\n";
         assert_eq!(read_app(old).hotkey, "Command+K");
         let cfg = AppConfig { excluded: vec!["~/Library/Caches".into()], launch_at_login: true, ..Default::default() };
         let new = write_app(old, &cfg).unwrap();
         let t: toml::Table = new.parse().unwrap();
         assert_eq!(t["mcp"]["deny"][0].as_str(), Some("~/.ssh"));
+        assert!(new.contains("# my notes") && new.contains("# keep keys out"), "{new}");
         assert_eq!(read_app(&new), cfg);
         assert_eq!(read_app(""), AppConfig::default());
         assert!(write_app("not = [toml", &cfg).is_err());

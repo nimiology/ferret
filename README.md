@@ -74,7 +74,15 @@ Cursor (`~/.cursor/mcp.json`):
 }
 ```
 
-Tools: `search_files`, `recent_files`, `largest_files`, `file_info`.
+Tools: `find_files` (query + sort by relevance, size or newest) and `file_info`.
+
+Measured in Claude Code, "find the business plan PDF I saved recently", 5 runs, warm cache:
+
+| | Shell tools (find / mdfind) | Ferret MCP |
+|---|---|---|
+| Cost per search | $0.096 | $0.016 |
+| Time | 81.5 s | 5.3 s |
+| Turns | 5.2 | 2 |
 
 ### Guardrails
 
@@ -105,12 +113,15 @@ Measured on the author's Mac (Apple Silicon, internal SSD):
 
 | What | Result |
 |---|---|
-| Full scan of `/` | 4,083,336 entries (3.08M files, 898K folders) in **215 s** |
+| Full scan of `/` (~4.1M entries, `getattrlistbulk`, 8 threads) | **87–96 s** (was 158–215 s with readdir + stat) |
+| Peak memory during the scan | 85–89 MB (was ~400 MB) |
 | Index in memory | ~298 MB |
 | Snapshot on disk | 286 MB |
+| Restart from snapshot | ~0.65 s until searchable |
 | Substring search, 2M-entry synthetic index (criterion) | 17–18 ms |
+| Daemon idle CPU | ~0.4% |
 
-**Known gap:** the first full scan takes 215 s, far from the 30 s goal. After that, FSEvents keeps the index current, so this is a one-time cost.
+**Known gap:** the first full scan still takes ~90 s, short of the 30 s goal; almost all of it is kernel time listing ~880K folders. After that, FSEvents keeps the index current and restarts load the snapshot, so this is a one-time cost.
 
 ### vs `mdfind -name` and `find`
 

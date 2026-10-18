@@ -31,6 +31,8 @@ pub struct Hit {
 pub struct SearchResult {
     pub hits: Vec<Hit>,
     pub total: usize,
+    /// Matches per kind (file, dir, symlink) ignoring the query's `type:`, for tab counts.
+    pub by_kind: [usize; 3],
     pub took_us: u64,
 }
 
@@ -128,15 +130,18 @@ pub fn search(index: &Index, q: &Query, limit: usize, sort: Sort) -> SearchResul
     let phrase = q.words.join(" ");
 
     let n = index.len();
-    let per_chunk: Vec<(usize, Vec<(Key, u32)>)> = (0..n.div_ceil(CHUNK))
+    // (matches, matches per kind, best hits) for one chunk
+    type Chunk = (usize, [usize; 3], Vec<(Key, u32)>);
+    let per_chunk: Vec<Chunk> = (0..n.div_ceil(CHUNK))
         .into_par_iter()
         .map(|c| {
             let mut count = 0;
+            let mut by_kind = [0; 3];
             let mut heap: BinaryHeap<Reverse<(Key, u32)>> = BinaryHeap::with_capacity(limit + 1);
             for i in (c * CHUNK).max(1)..((c + 1) * CHUNK).min(n) {
                 let i = i as u32;
                 let node = &index.nodes[i as usize];
-                if node.flags & FLAG_DELETED != 0 || q.kind.is_some_and(|k| k != node.kind) {
+                if node.flags & FLAG_DELETED != 0 {
                     continue;
                 }
                 if let Some((cmp, v)) = q.size {
@@ -179,6 +184,10 @@ pub fn search(index: &Index, q: &Query, limit: usize, sort: Sort) -> SearchResul
                         continue;
                     }
                 }
+                by_kind[node.kind as usize] += 1;
+                if q.kind.is_some_and(|k| k != node.kind) {
+                    continue;
+                }
                 count += 1;
                 if finders.len() > 1 && lower == phrase.as_bytes() {
                     score += 1000;
@@ -202,12 +211,16 @@ pub fn search(index: &Index, q: &Query, limit: usize, sort: Sort) -> SearchResul
                     heap.pop();
                 }
             }
-            (count, heap.into_iter().map(|Reverse(x)| x).collect())
+            (count, by_kind, heap.into_iter().map(|Reverse(x)| x).collect())
         })
         .collect();
 
-    let total = per_chunk.iter().map(|(c, _)| c).sum();
-    let mut best: Vec<(Key, u32)> = per_chunk.into_iter().flat_map(|(_, v)| v).collect();
+    let total = per_chunk.iter().map(|(c, _, _)| c).sum();
+    let mut by_kind = [0; 3];
+    for (_, k, _) in &per_chunk {
+        (0..3).for_each(|j| by_kind[j] += k[j]);
+    }
+    let mut best: Vec<(Key, u32)> = per_chunk.into_iter().flat_map(|(_, _, v)| v).collect();
     best.sort_unstable_by_key(|b| Reverse(b.0));
     best.truncate(limit);
     let hits = best
@@ -217,7 +230,7 @@ pub fn search(index: &Index, q: &Query, limit: usize, sort: Sort) -> SearchResul
             Hit { node: i, path: index.path(i), kind: node.kind, size: node.size, mtime: node.mtime, score }
         })
         .collect();
-    SearchResult { hits, total, took_us: start.elapsed().as_micros() as u64 }
+    SearchResult { hits, total, by_kind, took_us: start.elapsed().as_micros() as u64 }
 }
 
 #[cfg(test)]

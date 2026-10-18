@@ -108,19 +108,17 @@ fn filtering_and_limit_cap() {
 }
 
 #[test]
-fn query_building() {
-    assert_eq!(recent_query("2h", None, None).unwrap(), "type:file mod:<2h");
+fn sort_and_compact_render() {
+    assert_eq!(sort_arg(None).unwrap(), SortArg::Score);
+    assert_eq!(sort_arg(Some("size")).unwrap(), SortArg::Size);
+    assert_eq!(sort_arg(Some("newest")).unwrap(), SortArg::Mtime);
+    assert!(sort_arg(Some("bogus")).is_err());
+    let hits = vec![hit("/Users/x/Docs/a.pdf"), hit("/Users/xy/b"), hit("/etc/c")];
     assert_eq!(
-        recent_query("7d", Some("pdf"), Some(Path::new("/Users/x/Docs"))).unwrap(),
-        "type:file mod:<7d ext:pdf in:/Users/x/Docs"
+        render(&hits, &home()),
+        "~/Docs/a.pdf  1 B  1970-01-01 00:00\n/Users/xy/b  1 B  1970-01-01 00:00\n/etc/c  1 B  1970-01-01 00:00\n"
     );
-    // Spaces can't be expressed in `in:`; they are enforced by the post-filter instead.
-    assert_eq!(recent_query("1d", None, Some(Path::new("/Users/x/My Docs"))).unwrap(), "type:file mod:<1d");
-    assert!(recent_query("1d in:/", None, None).is_err(), "no token injection");
-    assert!(recent_query("banana", None, None).is_err());
-    assert!(recent_query("1d", Some("pdf in:/"), None).is_err());
-    assert_eq!(largest_query(None), "type:file");
-    assert_eq!(largest_query(Some(Path::new("/Users/x/Downloads"))), "type:file in:/Users/x/Downloads");
+    assert_eq!(render(&[], &home()), "no matches");
 }
 
 #[test]
@@ -141,6 +139,20 @@ fn formatting() {
     assert_eq!(fmt_time(1_791_731_000), "2026-10-11 15:03");
     assert_eq!(human_size(999), "999 B");
     assert_eq!(human_size(1_200_000), "1.2 MB");
+}
+
+#[test]
+fn missing_snapshot_is_retried_not_cached() {
+    let dir = tempfile::tempdir().unwrap();
+    let h = dir.path().canonicalize().unwrap();
+    fs::write(h.join("report.pdf"), "x").unwrap();
+    let snap = h.join("index.bin");
+    let ctx = Ctx::new(Policy::new(&h, None, vec![]), h.clone(), snap.clone(), h.join("mcp.log"), false);
+    assert!(ctx.filtered("report", None, SortArg::Score, KindFilter::All, None).is_err());
+    let (index, _) = ferret_core::scan::scan(&h).unwrap();
+    ferret_core::snapshot::save(&index, &snap).unwrap();
+    let hits = ctx.filtered("report", None, SortArg::Score, KindFilter::All, None).unwrap();
+    assert_eq!(hits.len(), 1);
 }
 
 #[tokio::test]
@@ -164,25 +176,32 @@ async fn end_to_end_over_duplex() {
     let client = ().serve(client_io).await.unwrap();
 
     let info = client.peer_info().unwrap();
-    assert!(info.instructions.as_deref().unwrap_or("").contains("mod:<7d"));
-    let mut names: Vec<_> = client.list_all_tools().await.unwrap().into_iter().map(|t| t.name.to_string()).collect();
+    assert!(info.instructions.as_deref().unwrap_or("").contains("find_files"));
+    let tools = client.list_all_tools().await.unwrap();
+    // Only find_files is loaded up front; file_info stays deferred so it costs nothing per turn.
+    for t in &tools {
+        let load = t.meta.as_ref().and_then(|m| m.get("anthropic/alwaysLoad")).cloned();
+        assert_eq!(load.is_some(), t.name == "find_files", "{}", t.name);
+    }
+    let mut names: Vec<_> = tools.into_iter().map(|t| t.name.to_string()).collect();
     names.sort();
-    assert_eq!(names, ["file_info", "largest_files", "recent_files", "search_files"]);
+    assert_eq!(names, ["file_info", "find_files"]);
 
     let args = serde_json::json!({"query": "invoice", "limit": 500}).as_object().unwrap().clone();
-    let r = client.call_tool(CallToolRequestParams::new("search_files").with_arguments(args)).await.unwrap();
+    let r = client.call_tool(CallToolRequestParams::new("find_files").with_arguments(args)).await.unwrap();
     let text = r.content[0].as_text().unwrap().text.clone();
-    assert!(text.starts_with("1 result\n"), "{text}");
-    assert!(text.contains("Documents/invoice-2026.pdf  2.0 KB"), "{text}");
+    assert!(text.starts_with("~/Documents/invoice-2026.pdf  2.0 KB"), "{text}");
+    assert_eq!(text.lines().count(), 1, "{text}");
     assert!(!text.contains(".ssh"), "{text}");
 
-    let args = serde_json::json!({"under": h.join("Documents"), "since": "1d"}).as_object().unwrap().clone();
-    let r = client.call_tool(CallToolRequestParams::new("recent_files").with_arguments(args)).await.unwrap();
+    let q = format!("mod:<1d type:file in:{}", h.join("Documents").display());
+    let args = serde_json::json!({"query": q, "sort": "newest"}).as_object().unwrap().clone();
+    let r = client.call_tool(CallToolRequestParams::new("find_files").with_arguments(args)).await.unwrap();
     assert!(r.content[0].as_text().unwrap().text.contains("invoice-2026.pdf"));
 
     client.cancel().await.unwrap();
     server.await.unwrap().unwrap();
     let logged = fs::read_to_string(&log).unwrap();
     assert_eq!(logged.lines().count(), 2);
-    assert!(logged.contains("\"tool\":\"search_files\""));
+    assert!(logged.contains("\"tool\":\"find_files\""));
 }

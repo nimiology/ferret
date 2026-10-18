@@ -1,9 +1,9 @@
 use crate::index::NO_PARENT;
 use crate::{Index, Kind, Result};
-use jwalk::WalkDir;
 use std::collections::HashMap;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::{mpsc, Mutex};
 use std::time::{Duration, Instant, UNIX_EPOCH};
 use unicode_normalization::{is_nfc, UnicodeNormalization};
 
@@ -27,73 +27,234 @@ pub fn scan(root: &Path) -> Result<(Index, ScanStats)> {
 /// `scan`, calling `progress(entries_so_far, current_path)` every 8192 entries.
 pub fn scan_with_progress(root: &Path, mut progress: impl FnMut(u64, &Path)) -> Result<(Index, ScanStats)> {
     let start = Instant::now();
-    std::fs::symlink_metadata(root)?; // fail fast on a missing root
+    let root_meta = std::fs::symlink_metadata(root)?; // fail fast on a missing root
     let mut index = Index::default();
     let mut stats = ScanStats::default();
-    // Only dirs live here, so it stays small (~hundreds of K entries for `/`).
-    let mut dirs: HashMap<PathBuf, u32> = HashMap::new();
-
-    let walk = WalkDir::new(root)
-        .skip_hidden(false)
-        .follow_links(false)
-        .sort(false)
-        .process_read_dir(|_, _, _, children| {
-            children.retain(|c| match c {
-                Ok(e) => !SKIP.iter().any(|s| e.path() == Path::new(s)),
-                Err(_) => true,
-            });
-        });
-
-    for entry in walk {
-        let e = match entry {
-            Ok(e) => e,
-            Err(err) => {
-                if err.io_error().map(|e| e.kind()) == Some(io::ErrorKind::PermissionDenied) {
-                    stats.permission_denied += 1;
-                }
-                continue;
-            }
-        };
-        let ft = e.file_type();
-        let kind = if ft.is_symlink() {
-            stats.symlinks += 1;
-            Kind::Symlink
-        } else if ft.is_dir() {
-            stats.dirs += 1;
-            Kind::Dir
-        } else {
-            stats.files += 1;
-            Kind::File
-        };
-        let (size, mtime) = match e.metadata() {
-            Ok(m) => (
-                if kind == Kind::Dir { 0 } else { m.len() },
-                m.modified()
-                    .ok()
-                    .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
-                    .map_or(0, |d| d.as_secs() as i64),
-            ),
-            Err(_) => (0, 0),
-        };
-        let (parent, name) = if e.depth == 0 {
-            (NO_PARENT, root.to_string_lossy().into_owned())
-        } else {
-            // jwalk yields depth-first, so the parent dir was already seen.
-            let Some(&p) = dirs.get(e.parent_path.as_ref()) else { continue };
-            let raw = e.file_name.to_string_lossy();
-            let name = if is_nfc(&raw) { raw.into_owned() } else { raw.nfc().collect() };
-            (p, name)
-        };
-        let id = index.push(parent, &name, kind, size, mtime);
-        if kind == Kind::Dir {
-            dirs.insert(e.path(), id);
-        }
-        if id % 8192 == 0 {
-            progress(id as u64, &e.parent_path);
-        }
+    let (kind, size, mtime) = meta_of(&root_meta);
+    count(&mut stats, kind);
+    index.push(NO_PARENT, &root.to_string_lossy(), kind, size, mtime);
+    if kind != Kind::Dir {
+        stats.elapsed = start.elapsed();
+        return Ok((index, stats));
     }
+
+    // Workers list directories in parallel; this thread is the only one touching `index`,
+    // so every child dir gets its node id before its own listing job is queued.
+    type Job = (u32, PathBuf);
+    type Done = (u32, PathBuf, io::Result<Vec<Entry>>);
+    let (job_tx, job_rx) = mpsc::channel::<Job>();
+    let job_rx = Mutex::new(job_rx);
+    let (done_tx, done_rx) = mpsc::channel::<Done>();
+    // Measured on 8 cores: past ~8 threads APFS lock contention only adds sys time.
+    let threads = std::thread::available_parallelism().map_or(8, |n| n.get()).min(8);
+
+    std::thread::scope(|s| {
+        for _ in 0..threads {
+            let done_tx = done_tx.clone();
+            let job_rx = &job_rx;
+            s.spawn(move || {
+                let mut buf = vec![0u8; 256 * 1024];
+                loop {
+                    let job = job_rx.lock().unwrap().recv();
+                    let Ok((id, path)) = job else { break };
+                    let res = list_dir(&path, &mut buf);
+                    if done_tx.send((id, path, res)).is_err() {
+                        break;
+                    }
+                }
+            });
+        }
+        let mut job_tx = Some(job_tx);
+        let mut pending = 1usize;
+        job_tx.as_ref().unwrap().send((0, root.to_path_buf())).unwrap();
+        while pending > 0 {
+            let Ok((parent, dir, res)) = done_rx.recv() else { break };
+            pending -= 1;
+            let entries = match res {
+                Ok(v) => v,
+                Err(e) => {
+                    if e.kind() == io::ErrorKind::PermissionDenied {
+                        stats.permission_denied += 1;
+                    }
+                    continue;
+                }
+            };
+            for e in entries {
+                count(&mut stats, e.kind);
+                let id = index.push(parent, &e.name, e.kind, e.size, e.mtime);
+                if let Some(p) = e.dir_path {
+                    job_tx.as_ref().unwrap().send((id, p)).unwrap();
+                    pending += 1;
+                }
+                if id % 8192 == 0 {
+                    progress(id as u64, &dir);
+                }
+            }
+        }
+        job_tx.take(); // workers see a closed channel and exit
+    });
     stats.elapsed = start.elapsed();
     Ok((index, stats))
+}
+
+fn count(stats: &mut ScanStats, kind: Kind) {
+    match kind {
+        Kind::File => stats.files += 1,
+        Kind::Dir => stats.dirs += 1,
+        Kind::Symlink => stats.symlinks += 1,
+    }
+}
+
+/// One directory entry as listed by `list_dir`.
+struct Entry {
+    name: String,
+    kind: Kind,
+    size: u64,
+    mtime: i64,
+    /// Full path (raw bytes, not NFC) for directories to descend into; None for SKIP dirs.
+    dir_path: Option<PathBuf>,
+}
+
+impl Entry {
+    fn new(dir: &Path, raw: &std::ffi::OsStr, kind: Kind, size: u64, mtime: i64) -> Entry {
+        let dir_path = (kind == Kind::Dir).then(|| dir.join(raw)).filter(|p| !SKIP.iter().any(|s| p == Path::new(s)));
+        Entry { name: nfc(raw), kind, size: if kind == Kind::Dir { 0 } else { size }, mtime, dir_path }
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn list_dir(dir: &Path, _buf: &mut Vec<u8>) -> io::Result<Vec<Entry>> {
+    let mut out = Vec::new();
+    for e in std::fs::read_dir(dir)?.flatten() {
+        if let Ok(m) = e.metadata() {
+            let (kind, size, mtime) = meta_of(&m);
+            out.push(Entry::new(dir, &e.file_name(), kind, size, mtime));
+        }
+    }
+    Ok(out)
+}
+
+/// List `dir` with getattrlistbulk(2): names, types, sizes and mtimes for many entries
+/// per syscall instead of readdir + one lstat per entry.
+#[cfg(target_os = "macos")]
+fn list_dir(dir: &Path, buf: &mut Vec<u8>) -> io::Result<Vec<Entry>> {
+    use std::os::unix::ffi::{OsStrExt, OsStringExt};
+    const VDIR: u32 = 2;
+    const VLNK: u32 = 5;
+
+    let c = std::ffi::CString::new(dir.as_os_str().to_owned().into_vec())?;
+    // SAFETY: valid NUL-terminated path; fd is closed by OwnedFd.
+    let fd = unsafe { libc::open(c.as_ptr(), libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC) };
+    if fd < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let fd = unsafe { <std::os::fd::OwnedFd as std::os::fd::FromRawFd>::from_raw_fd(fd) };
+    let mut al = libc::attrlist {
+        bitmapcount: libc::ATTR_BIT_MAP_COUNT,
+        reserved: 0,
+        commonattr: libc::ATTR_CMN_RETURNED_ATTRS
+            | libc::ATTR_CMN_NAME
+            | ATTR_CMN_ERROR
+            | libc::ATTR_CMN_OBJTYPE
+            | libc::ATTR_CMN_MODTIME,
+        volattr: 0,
+        dirattr: 0,
+        fileattr: libc::ATTR_FILE_DATALENGTH,
+        forkattr: 0,
+    };
+    let mut out = Vec::new();
+    loop {
+        // SAFETY: `al` and `buf` are valid for the call; the kernel writes at most buf.len() bytes.
+        let n = unsafe {
+            libc::getattrlistbulk(
+                std::os::fd::AsRawFd::as_raw_fd(&fd),
+                &mut al as *mut _ as *mut libc::c_void,
+                buf.as_mut_ptr() as *mut libc::c_void,
+                buf.len(),
+                0,
+            )
+        };
+        if n < 0 {
+            let e = io::Error::last_os_error();
+            if e.kind() == io::ErrorKind::Interrupted {
+                continue;
+            }
+            return Err(e);
+        }
+        if n == 0 {
+            return Ok(out);
+        }
+        let mut p = 0usize;
+        for _ in 0..n {
+            let Some(len) = rd_u32(buf, p) else { break };
+            let len = len as usize;
+            let Some(e) = buf.get(p..p + len).filter(|_| len >= 4) else { break };
+            p += len;
+            if let Some((raw, kind, size, mtime)) = parse_entry(e, VDIR, VLNK) {
+                out.push(Entry::new(dir, std::ffi::OsStr::from_bytes(raw), kind, size, mtime));
+            }
+        }
+    }
+}
+
+/// <sys/attr.h>; not exported by the libc crate.
+#[cfg(target_os = "macos")]
+const ATTR_CMN_ERROR: u32 = 0x2000_0000;
+
+fn rd_u32(b: &[u8], at: usize) -> Option<u32> {
+    Some(u32::from_ne_bytes(b.get(at..at.checked_add(4)?)?.try_into().ok()?))
+}
+
+fn rd_i64(b: &[u8], at: usize) -> Option<i64> {
+    Some(i64::from_ne_bytes(b.get(at..at.checked_add(8)?)?.try_into().ok()?))
+}
+
+/// Parse one packed getattrlistbulk record (`e` includes its leading length word).
+/// Layout: length, attribute_set_t returned, [error], [name ref], [objtype], [modtime], [datalength];
+/// attributes missing from `returned` take no space. Every read is bounds-checked.
+#[cfg(target_os = "macos")]
+fn parse_entry(e: &[u8], vdir: u32, vlnk: u32) -> Option<(&[u8], Kind, u64, i64)> {
+    let common = rd_u32(e, 4)?;
+    let file = rd_u32(e, 4 + 12)?;
+    let mut c = 4 + 20; // past length + attribute_set_t (5 x u32)
+    if common & ATTR_CMN_ERROR != 0 {
+        if rd_u32(e, c)? != 0 {
+            return None; // kernel couldn't get this entry's attributes
+        }
+        c += 4;
+    }
+    if common & libc::ATTR_CMN_NAME == 0 {
+        return None;
+    }
+    // attrreference_t: offset is relative to the attrreference itself; length includes the NUL.
+    let off = rd_u32(e, c)? as i32;
+    let nlen = rd_u32(e, c + 4)? as usize;
+    let start = usize::try_from(c as i64 + off as i64).ok()?;
+    let name = e.get(start..start.checked_add(nlen)?)?;
+    let name = name.split(|&b| b == 0).next()?;
+    if name.is_empty() {
+        return None;
+    }
+    c += 8;
+    let mut kind = Kind::File;
+    if common & libc::ATTR_CMN_OBJTYPE != 0 {
+        kind = match rd_u32(e, c)? {
+            t if t == vdir => Kind::Dir,
+            t if t == vlnk => Kind::Symlink,
+            _ => Kind::File,
+        };
+        c += 4;
+    }
+    let mut mtime = 0;
+    if common & libc::ATTR_CMN_MODTIME != 0 {
+        mtime = rd_i64(e, c)?.max(0); // timespec.tv_sec; pre-epoch -> 0 like the std path
+        c += 16;
+    }
+    let mut size = 0;
+    if file & libc::ATTR_FILE_DATALENGTH != 0 {
+        size = rd_i64(e, c)?.max(0) as u64;
+    }
+    Some((name, kind, size, mtime))
 }
 
 fn meta_of(m: &std::fs::Metadata) -> (Kind, u64, i64) {
@@ -272,6 +433,58 @@ mod tests {
         let h = find(".hidden");
         assert_eq!(ix.nodes[h as usize].flags & crate::index::FLAG_HIDDEN, crate::index::FLAG_HIDDEN);
         find("\u{e9}.txt"); // NFC
+    }
+
+    /// Plain std::fs walk: (path, kind, size, mtime) for every entry below `dir`.
+    fn reference(dir: &Path, out: &mut Vec<(String, Kind, u64, i64)>) {
+        let Ok(rd) = fs::read_dir(dir) else { return };
+        for e in rd.flatten() {
+            let m = fs::symlink_metadata(e.path()).unwrap();
+            let (kind, size, mtime) = meta_of(&m);
+            out.push((e.path().to_string_lossy().nfc().collect(), kind, size, mtime));
+            if kind == Kind::Dir {
+                reference(&e.path(), out);
+            }
+        }
+    }
+
+    #[test]
+    fn matches_std_walk() {
+        use std::os::unix::fs::PermissionsExt;
+        let t = tempfile::tempdir().unwrap();
+        let r = t.path().canonicalize().unwrap();
+        fs::create_dir_all(r.join("a/b/c")).unwrap();
+        for i in 0..3000 {
+            fs::write(r.join(format!("a/f{i}")), vec![0u8; i % 7]).unwrap(); // > one bulk buffer
+        }
+        fs::write(r.join("a/b/c/x.txt"), b"hello").unwrap();
+        fs::write(r.join(".hidden"), b"h").unwrap();
+        fs::write(r.join("e\u{301}.txt"), b"").unwrap();
+        fs::create_dir(r.join("d\u{301}ir")).unwrap();
+        fs::write(r.join("d\u{301}ir/in"), b"").unwrap();
+        std::os::unix::fs::symlink("a/b", r.join("link")).unwrap();
+        fs::File::create(r.join("big")).unwrap().set_len(5 << 30).unwrap();
+        fs::write(r.join("n".repeat(255)), b"").unwrap();
+        fs::create_dir(r.join("locked")).unwrap();
+        fs::write(r.join("locked/secret"), b"").unwrap();
+        fs::set_permissions(r.join("locked"), fs::Permissions::from_mode(0o000)).unwrap();
+
+        let (ix, st) = scan(&r).unwrap();
+        let mut want = Vec::new();
+        reference(&r, &mut want);
+        fs::set_permissions(r.join("locked"), fs::Permissions::from_mode(0o755)).unwrap();
+        let mut got: Vec<_> = (1..ix.len() as u32)
+            .map(|i| {
+                let n = ix.nodes[i as usize];
+                (ix.path(i), n.kind, n.size, n.mtime)
+            })
+            .collect();
+        got.sort_by(|a, b| a.0.cmp(&b.0));
+        want.sort_by(|a, b| a.0.cmp(&b.0));
+        assert_eq!(got, want);
+        assert_eq!(st.permission_denied, 1);
+        assert_eq!(st.symlinks, 1);
+        assert_eq!(ix.path(0), r.to_string_lossy());
     }
 
     fn live_paths(ix: &Index) -> Vec<String> {

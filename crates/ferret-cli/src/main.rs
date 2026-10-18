@@ -39,7 +39,8 @@ struct InitArgs {
     shell: String,
 }
 
-/// Instant file search. Subcommands: index, daemon, doctor, init. Anything else is a query.
+/// Instant file search. Subcommands: index, daemon, doctor, init, big, recent, mcp.
+/// Anything else is a query; `ff -- big` searches for the word "big".
 #[derive(Parser, Debug)]
 #[command(name = "ff", version)]
 struct QueryArgs {
@@ -227,13 +228,18 @@ pub fn load_snapshot() -> Result<Index> {
 }
 
 fn run_index(a: IndexArgs) -> Result<()> {
+    // Taken before scanning, so ferretd replays every change made during and after the scan.
+    let meta = snapshot::Meta {
+        last_event_id: unsafe { objc2_core_services::FSEventsGetCurrentEventId() },
+        volume_uuid: String::new(),
+    };
     let (index, st) = ferret_core::scan::scan(&a.root)
         .with_context(|| format!("could not scan {}", a.root.display()))?;
     let path = snapshot::default_path();
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir).with_context(|| format!("could not create {}", dir.display()))?;
     }
-    snapshot::save(&index, &path).with_context(|| format!("could not save snapshot to {}", path.display()))?;
+    snapshot::save_with(&index, &meta, &path).with_context(|| format!("could not save snapshot to {}", path.display()))?;
     let disk = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
 
     println!("indexed {} files in {:.2?}", fmt_count(st.files), st.elapsed);
@@ -422,6 +428,8 @@ mod tests {
         assert!(matches!(dispatch(&argv("ff daemon status")).unwrap(), Cmd::Daemon(a) if a.action == "status"));
         assert!(dispatch(&argv("ff daemon bogus")).is_err());
         assert!(matches!(dispatch(&argv("ff doctor")).unwrap(), Cmd::Doctor));
+        // `--` searches for a word that is also a subcommand name
+        assert!(matches!(dispatch(&argv("ff -- big pdf")).unwrap(), Cmd::Query(a) if a.query == ["big", "pdf"]));
         assert!(matches!(dispatch(&argv("ff init zsh")).unwrap(), Cmd::Init(a) if a.shell == "zsh"));
     }
 

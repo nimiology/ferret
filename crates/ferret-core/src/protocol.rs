@@ -100,6 +100,9 @@ pub struct Response {
     pub took_us: u64,
     #[serde(default)]
     pub total: usize,
+    /// Matches per kind (file, dir, symlink) ignoring the kind filter, for tab counts.
+    #[serde(default)]
+    pub by_kind: [usize; 3],
     #[serde(default)]
     pub hits: Vec<HitOut>,
     #[serde(skip_serializing_if = "Option::is_none")]
