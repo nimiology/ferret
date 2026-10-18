@@ -1,4 +1,4 @@
-//! The Ferret mark (docs/design/Ferret.dc.html screen 08, assets/icon.svg), rasterized with tiny-skia.
+//! The Ferret mark (assets/icon.svg), rasterized with tiny-skia.
 //! Geometry is in the SVG's 100×100 viewBox.
 use tiny_skia::{Color, FillRule, Paint, PathBuilder, Pixmap, Rect, Stroke, Transform};
 

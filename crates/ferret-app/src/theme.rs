@@ -1,4 +1,4 @@
-//! Color tokens from docs/design/Ferret.dc.html (`L`, `D`, `ACC.Orange`).
+//! Color tokens for the light and dark themes, with the orange accent.
 use eframe::egui::Color32;
 
 pub struct Theme {
