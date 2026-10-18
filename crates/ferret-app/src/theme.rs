@@ -9,7 +9,6 @@ pub struct Theme {
     pub mu: Color32,
     pub fa: Color32,
     pub hl: Color32,
-    pub bar: Color32,
     pub ac: Color32,
     pub acs: Color32,
 }
@@ -26,7 +25,6 @@ pub const L: Theme = Theme {
     mu: hex(0x6E6B65),
     fa: hex(0xA29E97),
     hl: hex(0xE9E7E3),
-    bar: hex(0xF4F3F0),
     ac: hex(0xC4501B),
     acs: hex(0xFBEBE2),
 };
@@ -39,7 +37,6 @@ pub const D: Theme = Theme {
     mu: hex(0x9D9A94),
     fa: hex(0x67655F),
     hl: hex(0x2E2E33),
-    bar: hex(0x1D1D20),
     ac: hex(0xFF9259),
     acs: hex(0x3A251B),
 };

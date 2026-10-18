@@ -5,7 +5,7 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use memchr::memmem::Finder;
 use rayon::prelude::*;
 
-use crate::index::NO_PARENT;
+use crate::index::{FLAG_DELETED, NO_PARENT};
 use crate::query::Cmp;
 use crate::{Index, Kind, Query};
 
@@ -54,7 +54,7 @@ fn under_ids(index: &Index, under: &str) -> Option<Vec<u32>> {
         (0..index.len() as u32)
             .into_par_iter()
             .filter(|&i| {
-                index.nodes[i as usize].kind == Kind::Dir && index.name(i) == last && index.path(i) == under
+                index.nodes[i as usize].kind == Kind::Dir && index.is_live(i) && index.name(i) == last && index.path(i) == under
             })
             .collect(),
     )
@@ -130,7 +130,7 @@ pub fn search(index: &Index, q: &Query, limit: usize, sort: Sort) -> SearchResul
             for i in (c * CHUNK).max(1)..((c + 1) * CHUNK).min(n) {
                 let i = i as u32;
                 let node = &index.nodes[i as usize];
-                if q.kind.is_some_and(|k| k != node.kind) {
+                if node.flags & FLAG_DELETED != 0 || q.kind.is_some_and(|k| k != node.kind) {
                     continue;
                 }
                 if let Some((cmp, v)) = q.size {

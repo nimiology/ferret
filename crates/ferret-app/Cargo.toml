@@ -8,8 +8,31 @@ license.workspace = true
 name = "ferret"
 path = "src/main.rs"
 
+# `cargo install cargo-packager --locked` then, from this directory: `cargo packager --release`
+# Icons: `cargo run -p ferret-app --example make_icons` + iconutil (see examples/make_icons.rs).
+[package.metadata.packager]
+product-name = "Ferret"
+identifier = "com.ferret.app"
+category = "Utility"
+formats = ["app", "dmg"]
+icons = ["assets/AppIcon.icns"]
+before-packaging-command = "cargo build --release -p ferret-app"
+out-dir = "../../target/packager"
+binaries-dir = "../../target/release"
+binaries = [{ path = "ferret", main = true }]
+
+[package.metadata.packager.macos]
+minimum-system-version = "11.0"
+info-plist-path = "assets/Info.plist" # merged into the generated plist: LSUIElement
+
 [dependencies]
 ferret-core = { path = "../ferret-core" }
 eframe = "0.29"
 anyhow = "1"
 libc = "0.2"
+tray-icon = "0.26.1"
+global-hotkey = "0.9.0"
+toml = "1.1.8"
+tiny-skia = "0.12.0"
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3", features = ["NSApplication", "NSRunningApplication", "NSResponder"] }

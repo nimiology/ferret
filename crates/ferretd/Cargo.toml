@@ -1,0 +1,22 @@
+[package]
+name = "ferretd"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "ferretd"
+path = "src/main.rs"
+
+[dependencies]
+ferret-core = { path = "../ferret-core" }
+tokio = { version = "1", features = ["rt-multi-thread", "net", "io-util", "macros", "signal", "time"] }
+parking_lot = "0.12"
+serde_json = "1"
+tracing = "0.1"
+tracing-subscriber = "0.3"
+objc2-core-services = { version = "0.3", default-features = false, features = ["std", "FSEvents"] }
+objc2-core-foundation = { version = "0.3", default-features = false, features = ["std", "CFArray", "CFString", "CFRunLoop"] }
+
+[dev-dependencies]
+tempfile = "3"

@@ -25,6 +25,8 @@ pub struct Node {
 }
 
 pub const FLAG_HIDDEN: u8 = 1;
+/// Tombstone: the entry is gone from disk. Search skips it; `compact` drops it.
+pub const FLAG_DELETED: u8 = 2;
 
 #[derive(Default, Serialize, Deserialize)]
 pub struct Index {
@@ -35,16 +37,130 @@ pub struct Index {
     pub names_lower: Vec<u8>,
     /// Offsets into `names_lower` (lowercasing can change byte length): (off, len) per node.
     pub lower_spans: Vec<(u32, u16)>,
+    /// Child links (NO_PARENT = none). Derived from `parent`, rebuilt by `relink` after load.
+    #[serde(skip)]
+    pub first_child: Vec<u32>,
+    #[serde(skip)]
+    pub next_sibling: Vec<u32>,
+    /// Number of tombstoned nodes.
+    #[serde(skip)]
+    pub deleted: usize,
 }
 
 impl Index {
+    /// Rebuild child links and the tombstone count from `nodes`.
+    pub fn relink(&mut self) {
+        let n = self.nodes.len();
+        self.first_child = vec![NO_PARENT; n];
+        self.next_sibling = vec![NO_PARENT; n];
+        self.deleted = 0;
+        for i in (0..n).rev() {
+            let node = self.nodes[i];
+            if node.flags & FLAG_DELETED != 0 {
+                self.deleted += 1;
+            }
+            if node.parent != NO_PARENT {
+                self.next_sibling[i] = self.first_child[node.parent as usize];
+                self.first_child[node.parent as usize] = i as u32;
+            }
+        }
+    }
+
+    pub fn is_live(&self, i: u32) -> bool {
+        self.nodes[i as usize].flags & FLAG_DELETED == 0
+    }
+
+    pub fn live_count(&self) -> usize {
+        self.nodes.len() - self.deleted
+    }
+
+    /// Live direct children of `dir`.
+    pub fn children(&self, dir: u32) -> impl Iterator<Item = u32> + '_ {
+        let mut c = self.first_child.get(dir as usize).copied().unwrap_or(NO_PARENT);
+        std::iter::from_fn(move || {
+            while c != NO_PARENT {
+                let i = c;
+                c = self.next_sibling[i as usize];
+                if self.is_live(i) {
+                    return Some(i);
+                }
+            }
+            None
+        })
+    }
+
+    /// Node for an absolute path (NFC components), walking from the root by name.
+    pub fn find(&self, path: &std::path::Path) -> Option<u32> {
+        use unicode_normalization::UnicodeNormalization;
+        if self.is_empty() {
+            return None;
+        }
+        let rel = path.strip_prefix(self.name(0)).ok()?;
+        let mut cur = 0u32;
+        for comp in rel.components() {
+            let std::path::Component::Normal(c) = comp else { return None };
+            let c: String = c.to_string_lossy().nfc().collect();
+            cur = self.children(cur).find(|&i| self.name(i) == c)?;
+        }
+        Some(cur)
+    }
+
+    /// Tombstone `i` and all its live descendants.
+    pub fn remove(&mut self, i: u32) {
+        let mut stack = vec![i];
+        while let Some(i) = stack.pop() {
+            if !self.is_live(i) {
+                continue;
+            }
+            stack.extend(self.children(i));
+            self.nodes[i as usize].flags |= FLAG_DELETED;
+            self.deleted += 1;
+        }
+    }
+
+    /// Rebuild all arrays without tombstones. Node ids change; the root stays 0.
+    pub fn compact(&mut self) {
+        let mut out = Index::default();
+        let mut remap = vec![NO_PARENT; self.len()];
+        for i in 0..self.len() {
+            let n = self.nodes[i];
+            if n.flags & FLAG_DELETED != 0 {
+                continue;
+            }
+            // Parents always have lower ids than children (append-only), so remap is already filled.
+            let parent = if n.parent == NO_PARENT { NO_PARENT } else { remap[n.parent as usize] };
+            let id = out.push(parent, self.name(i as u32), n.kind, n.size, n.mtime);
+            out.nodes[id as usize].flags = n.flags;
+            remap[i] = id;
+        }
+        *self = out;
+    }
+
+    /// Compact when more than 20% of nodes are tombstones.
+    pub fn maybe_compact(&mut self) -> bool {
+        let due = self.deleted * 5 > self.len();
+        if due {
+            self.compact();
+        }
+        due
+    }
+
     /// Append a node. `name` must already be NFC-normalized.
     /// The root node (parent == NO_PARENT) should be named with its absolute path, e.g. "/".
     pub fn push(&mut self, parent: u32, name: &str, kind: Kind, size: u64, mtime: i64) -> u32 {
+        if self.first_child.len() != self.nodes.len() {
+            self.relink();
+        }
         let name = truncate(name);
         let lower = name.to_lowercase();
         let lower = truncate(&lower);
         let id = self.nodes.len() as u32;
+        self.first_child.push(NO_PARENT);
+        self.next_sibling.push(NO_PARENT);
+        if parent != NO_PARENT {
+            self.next_sibling[id as usize] = self.first_child[parent as usize];
+            self.first_child[parent as usize] = id;
+        }
         self.nodes.push(Node {
             parent,
             name_off: self.names.len() as u32,

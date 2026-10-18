@@ -1,0 +1,130 @@
+# Ferret
+
+**fzf for your whole Mac, and your AI agent can use it too.**
+
+Ferret indexes every file name on your disk once, keeps the index live with FSEvents, and answers queries in milliseconds. It ships as:
+
+- `ff`: the CLI and an interactive picker (`ff -i`)
+- `ferretd`: a small background daemon that keeps the index in memory and up to date
+- `ff mcp`: an MCP server so Claude Code, Cursor and other agents can find files by name and metadata (never contents)
+- `ferret`: a native GUI search window (egui)
+
+<!-- TODO: GIF slots. Record with vhs (see docs/demo/*.tape), then uncomment. -->
+<!-- ![ff in the terminal](docs/demo/ff.gif) -->
+<!-- ![Claude Code using ff mcp](docs/demo/mcp.gif) -->
+
+## Install
+
+```sh
+# Homebrew (TODO: tap not published yet; replace OWNER once the GitHub repo exists)
+brew install OWNER/ferret/ferret-cli OWNER/ferret/ferretd OWNER/ferret/ferret-app
+
+# From source (Rust stable)
+git clone https://github.com/OWNER/ferret && cd ferret   # TODO: real URL
+cargo install --path crates/ferret-cli    # ff
+cargo install --path crates/ferretd       # ferretd
+cargo install --path crates/ferret-app    # ferret (GUI)
+```
+
+Release tarballs for Apple Silicon and Intel are attached to each GitHub release, with a shell installer.
+
+## Quick start
+
+```sh
+ff index                      # first full scan (see benchmarks for timing)
+ff daemon install             # launchd agent: keeps the index live
+ff invoice 2025 *.pdf         # all words must appear in the name
+ff ext:psd size:>100MB        # big Photoshop files
+ff -i                         # interactive picker
+eval "$(ff init zsh)"         # add to ~/.zshrc: Ctrl-T inserts a path, `fcd` jumps to a folder
+```
+
+Without the daemon, `ff` falls back to the last snapshot (`~/Library/Caches/ferret/index.bin`).
+
+## Query syntax
+
+| Token | Meaning | Example |
+|---|---|---|
+| `word` | name contains word (case-insensitive); all words must match | `ff tax 2025` |
+| `"exact phrase"` | name contains the phrase | `ff "final draft"` |
+| `!word` | exclude names containing word | `ff report !old` |
+| `*.ext` / `ext:a;b` | extension filter | `ff ext:jpg;png` |
+| `type:file` / `type:dir` | files or folders only | `ff node_modules type:dir` |
+| `size:>N` / `size:<N` | size, units KB MB GB | `ff size:>1GB` |
+| `mod:<7d` / `mod:>1y` | modified within / older than (s m h d w y) | `ff mod:<2d *.md` |
+| `in:path` | limit to a folder | `ff in:~/Projects Cargo.toml` |
+
+Flags: `--limit N` (default 50), `--sort score|size|mtime`.
+
+## AI agents (MCP)
+
+Claude Code:
+
+```sh
+claude mcp add --scope user ferret -- ff mcp
+```
+
+Cursor (`~/.cursor/mcp.json`):
+
+```json
+{
+  "mcpServers": {
+    "ferret": { "command": "ff", "args": ["mcp"] }
+  }
+}
+```
+
+Tools: `search_files`, `recent_files`, `largest_files`, `file_info`.
+
+### Guardrails
+
+- **Names and metadata only.** Ferret never reads file contents; it returns paths, sizes and dates.
+- **At most 100 results** per call.
+- **Allow / deny list** in `~/.config/ferret/config.toml`. Allow defaults to your home folder:
+
+  ```toml
+  [mcp]
+  allow = ["~/Projects", "~/Documents"]
+  deny  = ["~/Documents/Private"]
+  ```
+
+- **Default denies, always on** (cannot be allowed back): `~/.ssh`, `~/.gnupg`, `~/.aws`, `~/.kube`, `~/.docker/config.json`, `~/.netrc`, `~/.config/gh`, `~/Library/Keychains`, `~/Library/Messages`, `~/Library/Mail`, `~/Library/Cookies`, `~/Library/Safari`, and Chrome, Firefox, Brave and Arc profile folders.
+- **Every call is logged** to `~/Library/Logs/ferret/mcp.log`.
+
+## Full Disk Access
+
+macOS hides some folders (Mail, Messages, Safari, other apps' containers) from processes without Full Disk Access. Without it Ferret still works, but those folders are missing from the index. To grant it: System Settings → Privacy & Security → Full Disk Access → add `ferretd` (and your terminal if you run `ff index` directly). `ff doctor` reports what is missing.
+
+## GUI
+
+`ferret` opens a search window: type to search, ↑/↓ to move, Enter opens, Cmd-Enter reveals in Finder, Esc clears. It shares the same index as `ff` (daemon first, snapshot fallback).
+
+## Benchmarks
+
+Measured on the author's Mac (Apple Silicon, internal SSD):
+
+| What | Result |
+|---|---|
+| Full scan of `/` | 4,083,336 entries (3.08M files, 898K folders) in **215 s** |
+| Index in memory | ~298 MB |
+| Snapshot on disk | 286 MB |
+| Substring search, 2M-entry synthetic index (criterion) | 17–18 ms |
+
+**Known gap:** the first full scan takes 215 s, far from the 30 s goal. After that, FSEvents keeps the index current, so this is a one-time cost.
+
+### vs `mdfind -name` and `find`
+
+<!-- TODO: run with hyperfine (not installed when this was written):
+hyperfine --warmup 1 --runs 3 \
+  "ff invoice" "mdfind -name invoice" "find ~/Documents -iname '*invoice*'"
+-->
+
+| Command | Mean time | Notes |
+|---|---|---|
+| `ff invoice` | TODO | |
+| `mdfind -name invoice` | TODO | Spotlight index |
+| `find ~/Documents -iname '*invoice*'` | TODO | ~/Documents only |
+
+## License
+
+MIT, see [LICENSE](LICENSE).
