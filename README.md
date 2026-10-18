@@ -98,6 +98,10 @@ Flags: `--limit N`, `--sort score|size|mtime`, `--json` and `-0` for scripts. `f
 
 Press **⌥Space** from anywhere and a search panel drops in. Type to search, switch between **All · Files · Folders · Recent · Large** with Tab, **Enter** opens, **⌘Enter** reveals in Finder, **⌘Y** opens Quick Look, **⌘C** copies the path. The panel follows your light or dark theme, and you can change the hotkey in Settings.
 
+<p align="center">
+  <img src="docs/demo/app.gif" width="720" alt="The Ferret panel: searching invoices, finding Xcode, then the Large tab sorting disk images by size">
+</p>
+
 ## Let your AI agent find files 🤖
 
 ```sh
