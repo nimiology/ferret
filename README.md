@@ -59,7 +59,11 @@ Spotlight skips hidden folders and half your dev tree. `find` takes a minute and
 brew install nimiology/ferret/ferret
 ```
 
-**Menu bar app:** grab `Ferret-<version>-universal.dmg` from the [latest release](https://github.com/nimiology/ferret/releases/latest) (Apple Silicon and Intel). It isn't notarized yet, so the first time, right-click Ferret.app → **Open**.
+**Menu bar app:** grab `Ferret-<version>-universal.dmg` from the [latest release](https://github.com/nimiology/ferret/releases/latest) (Apple Silicon and Intel). It isn't notarized yet, so macOS will say it "could not verify" Ferret the first time. Click **Done**, then **System Settings → Privacy & Security → Open Anyway**. Or, in one line:
+
+```sh
+xattr -dr com.apple.quarantine /Applications/Ferret.app
+```
 
 <details>
 <summary>From source</summary>
