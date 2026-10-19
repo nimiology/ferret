@@ -20,15 +20,19 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Install cargo-packager
         run: cargo install cargo-packager --locked
-      - name: Build universal binary
+      # ff + ferretd ride along in Ferret.app/Contents/MacOS, so DMG users get the CLI, daemon and MCP server.
+      - name: Build universal binaries
         run: |
-          cargo build --release -p ferret-app --target aarch64-apple-darwin
-          cargo build --release -p ferret-app --target x86_64-apple-darwin
+          for t in aarch64-apple-darwin x86_64-apple-darwin; do
+            cargo build --release -p ferret-app -p ferret --target $t
+          done
           mkdir -p target/release
-          lipo -create -output target/release/ferret \
-            target/aarch64-apple-darwin/release/ferret \
-            target/x86_64-apple-darwin/release/ferret
-          lipo -info target/release/ferret
+          for b in ferret ff ferretd; do
+            lipo -create -output target/release/$b \
+              target/aarch64-apple-darwin/release/$b \
+              target/x86_64-apple-darwin/release/$b
+            lipo -info target/release/$b
+          done
       - name: Package .dmg
         working-directory: crates/ferret-app
         run: cargo packager --release --formats dmg

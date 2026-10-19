@@ -9,7 +9,7 @@ use std::sync::mpsc::{channel, Receiver};
 use eframe::egui;
 use global_hotkey::{hotkey::HotKey, GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState};
 use objc2::MainThreadMarker;
-use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy};
+use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy, NSWindow};
 use tray_icon::menu::{accelerator::Accelerator, Menu, MenuEvent, MenuItem, PredefinedMenuItem};
 use tray_icon::{Icon, TrayIcon, TrayIconBuilder};
 
@@ -35,11 +35,36 @@ fn app() -> Option<objc2::rc::Retained<NSApplication>> {
     MainThreadMarker::new().map(NSApplication::sharedApplication)
 }
 
-pub fn show() {
+/// The search panel: the root viewport, titled "Ferret" in main.rs (Settings is "Ferret Settings").
+fn panel() -> Option<objc2::rc::Retained<NSWindow>> {
+    app()?
+        .windows()
+        .iter()
+        .find(|w| w.title().to_string() == "Ferret")
+}
+
+fn activate() {
     if let Some(a) = app() {
         a.unhide(None);
         #[allow(deprecated)] // activate() is macOS 14+
         a.activateIgnoringOtherApps(true);
+    }
+}
+
+/// Bring up the search panel.
+pub fn show() {
+    activate();
+    if let Some(w) = panel() {
+        w.makeKeyAndOrderFront(None); // undo show_settings' orderOut
+    }
+}
+
+/// Bring the app forward for the Settings window only: unhide would also restore the panel,
+/// so order it out (not ViewportCommand::Visible, see the module comment).
+pub fn show_settings() {
+    activate();
+    if let Some(w) = panel() {
+        w.orderOut(None);
     }
 }
 
@@ -49,8 +74,8 @@ pub fn hide() {
     }
 }
 
-fn visible() -> bool {
-    app().is_some_and(|a| a.isActive() && !a.isHidden())
+pub fn panel_visible() -> bool {
+    app().is_some_and(|a| a.isActive() && !a.isHidden()) && panel().is_some_and(|w| w.isVisible())
 }
 
 impl Shell {
@@ -84,22 +109,21 @@ impl Shell {
             if e.id == quit_id {
                 std::process::exit(0);
             }
-            if e.id == open_id || e.id == settings_id {
+            if e.id == open_id {
                 show();
-                let _ = t.send(if e.id == settings_id {
-                    Cmd::Settings
-                } else {
-                    Cmd::Shown
-                });
-                c.request_repaint();
+                let _ = t.send(Cmd::Shown);
+            } else if e.id == settings_id {
+                show_settings();
+                let _ = t.send(Cmd::Settings);
             }
+            c.request_repaint();
         }));
         let c = ctx.clone();
         GlobalHotKeyEvent::set_event_handler(Some(move |e: GlobalHotKeyEvent| {
             if e.state != HotKeyState::Pressed {
                 return;
             }
-            if visible() {
+            if panel_visible() {
                 hide();
             } else {
                 show();

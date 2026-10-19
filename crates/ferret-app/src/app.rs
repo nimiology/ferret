@@ -18,7 +18,6 @@ const ROW_H: f32 = 36.0;
 const LIMIT: usize = 200;
 const RECENT_LIMIT: usize = 6;
 const W: f32 = 720.0;
-const MCP_LINE: &str = "claude mcp add --scope user ferret -- ff mcp";
 const FDA_URL: &str = "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles";
 
 /// Screen 03a "Try" cards.
@@ -1067,12 +1066,16 @@ impl App {
     fn settings_window(&mut self, ctx: &egui::Context, t: &'static Theme) {
         let vb = egui::ViewportBuilder::default()
             .with_title("Ferret Settings")
-            .with_inner_size([520.0, 460.0])
+            .with_inner_size([560.0, 600.0])
             .with_resizable(false);
         ctx.show_viewport_immediate(egui::ViewportId::from_hash_of("settings"), vb, |ctx, _| {
             if ctx.input(|i| i.viewport().close_requested()) {
                 self.settings_open = false;
                 self.recording = false;
+                // Opened from the menu bar with the panel ordered out: don't stay active windowless.
+                if self.shell.is_some() && !shell::panel_visible() {
+                    shell::hide();
+                }
             }
             egui::CentralPanel::default()
                 .frame(egui::Frame::none().fill(t.panel).inner_margin(22.0))
@@ -1151,7 +1154,7 @@ impl App {
         heading(
             ui,
             "Excluded folders",
-            "Ferret won’t index these paths. Globs allowed. (Read by ferretd in a later version.)",
+            "Ferret won’t index these paths. Globs allowed. node_modules, virtualenvs, build output and .gitignore’d files are skipped by default. Takes effect after a re-index (see README).",
         );
         let mut changed = false;
         egui::Frame::none()
@@ -1237,6 +1240,7 @@ impl App {
             "AI agents (MCP)",
             "Let Claude Code and other MCP clients query your index. Run once in a terminal:",
         );
+        let line = config::mcp_line();
         ui.horizontal(|ui| {
             egui::Frame::none()
                 .fill(t.sub)
@@ -1245,15 +1249,42 @@ impl App {
                 .inner_margin(8.0)
                 .show(ui, |ui| {
                     ui.label(
-                        egui::RichText::new(MCP_LINE)
+                        egui::RichText::new(&line)
                             .font(FontId::monospace(12.0))
                             .color(t.tx),
                     );
                 });
             if ui.button("Copy").clicked() {
-                ui.output_mut(|o| o.copied_text = MCP_LINE.into());
+                ui.output_mut(|o| o.copied_text = line.clone());
             }
         });
+        ui.add_space(6.0);
+        if ui
+            .checkbox(&mut self.cfg.mcp_contents, "Let agents search file contents")
+            .changed()
+        {
+            changed = true;
+        }
+        ui.label(
+            egui::RichText::new("Turns on search_contents. Secret folders (~/.ssh, keychains, browser profiles…) stay off limits.")
+                .size(12.0)
+                .color(t.mu),
+        );
+        if config::bundled_ff().is_some() {
+            ui.add_space(10.0);
+            ui.horizontal(|ui| {
+                let res = if ui.button("Install `ff` command").clicked() {
+                    Some(config::install_cli())
+                } else if ui.button("Start background indexer").clicked() {
+                    Some(config::start_daemon())
+                } else {
+                    None
+                };
+                if let Some(r) = res {
+                    self.settings_msg = Some(r.unwrap_or_else(|e| format!("Failed: {e}")));
+                }
+            });
+        }
 
         if changed {
             self.save_cfg();

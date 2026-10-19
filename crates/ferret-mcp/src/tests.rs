@@ -89,6 +89,67 @@ fn config_parsing_tilde_and_deny_beats_allow() {
     assert!(!Policy::load(&home(), &cfg)
         .unwrap()
         .allows(Path::new("/Users/x/.gnupg/k")));
+    // Content search is opt-in.
+    assert!(!Policy::load(&home(), &cfg).unwrap().contents);
+    fs::write(&cfg, "[mcp]\ncontents = true\n").unwrap();
+    assert!(Policy::load(&home(), &cfg).unwrap().contents);
+}
+
+fn grep(ctx: &Ctx, q: &str, path: Option<&str>, glob: Option<&str>) -> Result<String, String> {
+    let a = ContentArgs {
+        query: q.into(),
+        path: path.map(Into::into),
+        glob: glob.map(Into::into),
+        limit: None,
+    };
+    search_contents(ctx, &a).map(|r| r.0)
+}
+
+#[test]
+fn search_contents_matches_and_skips() {
+    let dir = tempfile::tempdir().unwrap();
+    let h = dir.path().canonicalize().unwrap();
+    let w = |p: &str, body: &[u8]| {
+        let p = h.join(p);
+        fs::create_dir_all(p.parent().unwrap()).unwrap();
+        fs::write(p, body).unwrap();
+    };
+    w("proj/src/main.rs", b"fn main() {\n    let needle = 1;\n}\n");
+    w("proj/notes.md", b"a NEEDLE here\n");
+    w("proj/node_modules/x/i.js", b"needle\n");
+    w("proj/.venv2/pyvenv.cfg", b"");
+    w("proj/.venv2/lib/a.py", b"needle\n");
+    w("proj/.git/HEAD", b"needle\n");
+    w("proj/.gitignore", b"out/\n");
+    w("proj/out/gen.rs", b"needle\n");
+    w("proj/bin.dat", b"needle\0\x01\x02");
+    w(".ssh/config", b"needle\n");
+    let mut big = b"needle\n".to_vec();
+    big.resize((5 << 20) + 1, b'x');
+    w("proj/big.txt", &big);
+
+    let mut ctx = ctx_for(&h);
+    assert!(grep(&ctx, "needle", None, None).unwrap_err().contains("Content search is off"));
+    ctx.policy.contents = true;
+
+    // smart case: lowercase matches both; only the two real files
+    let out = grep(&ctx, "needle", None, None).unwrap();
+    let mut lines: Vec<_> = out.lines().collect();
+    lines.sort();
+    assert_eq!(
+        lines,
+        ["~/proj/notes.md:1: a NEEDLE here", "~/proj/src/main.rs:2: let needle = 1;"],
+        "{out}"
+    );
+    // regex, glob, in:
+    assert_eq!(grep(&ctx, r"let \w+ =", None, None).unwrap().lines().count(), 1);
+    let out = grep(&ctx, "needle", Some("~/proj"), Some("*.md")).unwrap();
+    assert_eq!(out.trim(), "~/proj/notes.md:1: a NEEDLE here");
+    // invalid regex falls back to a literal
+    assert_eq!(grep(&ctx, "main(", None, None).unwrap(), "~/proj/src/main.rs:1: fn main() {\n");
+    // secrets: refused as a root and skipped inside the walk
+    assert!(grep(&ctx, "needle", Some("~/.ssh"), None).is_err());
+    assert_eq!(grep(&ctx, "zzz-none", None, None).unwrap(), "no matches");
 }
 
 fn ctx_for(home: &Path) -> Ctx {
@@ -261,7 +322,7 @@ async fn end_to_end_over_duplex() {
         .instructions
         .as_deref()
         .unwrap_or("")
-        .contains("find_files"));
+        .contains("search_contents = search inside files"));
     let tools = client.list_all_tools().await.unwrap();
     // Only find_files is loaded up front; file_info stays deferred so it costs nothing per turn.
     for t in &tools {
@@ -274,7 +335,7 @@ async fn end_to_end_over_duplex() {
     }
     let mut names: Vec<_> = tools.into_iter().map(|t| t.name.to_string()).collect();
     names.sort();
-    assert_eq!(names, ["file_info", "find_files"]);
+    assert_eq!(names, ["file_info", "find_files", "search_contents"]);
 
     let args = serde_json::json!({"query": "invoice", "limit": 500})
         .as_object()

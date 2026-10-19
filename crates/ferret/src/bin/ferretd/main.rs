@@ -5,7 +5,7 @@ mod fsevents;
 
 use ferret_core::protocol::{self, HitOut, KindFilter, Op, Request, Response, Status};
 use ferret_core::snapshot::{self, Meta};
-use ferret_core::{scan, Index, Kind};
+use ferret_core::{scan, Excludes, Index, Kind};
 use parking_lot::{Mutex, RwLock};
 use std::collections::HashSet;
 use std::os::unix::fs::PermissionsExt;
@@ -21,6 +21,8 @@ use tracing::{debug, error, info, warn};
 pub struct Shared {
     index: RwLock<Index>,
     root: PathBuf,
+    /// Read once at startup; config edits apply after a restart or `ff index`.
+    excludes: Excludes,
     snapshot: PathBuf,
     volume_uuid: String,
     last_event_id: AtomicU64,
@@ -108,7 +110,7 @@ fn full_scan(sh: &Shared) {
     // Size of the index being replaced, if any; 0 = no idea, report progress 0.
     let guess = sh.index.read().len() as f32;
     info!(root = %sh.root.display(), "full scan started");
-    let res = scan::scan_with_progress(&sh.root, |n, p| {
+    let res = scan::scan_with_progress(&sh.root, &sh.excludes, |n, p| {
         let progress = if guess > 1.0 {
             (n as f32 / guess).min(0.99)
         } else {
@@ -209,13 +211,13 @@ fn writer(sh: Arc<Shared>, rx: Receiver<fsevents::Event>, overflow: fsevents::Ov
         if !paths.is_empty() {
             let mut ix = sh.index.write();
             for p in paths.drain() {
-                if let Err(e) = scan::apply_path(&mut ix, &p) {
+                if let Err(e) = scan::apply_path(&mut ix, &p, &sh.excludes) {
                     debug!(path = %p.display(), "apply failed: {e}");
                 }
             }
         }
         for d in dirs.drain() {
-            if let Err(e) = scan::rescan_dir(&mut sh.index.write(), &d) {
+            if let Err(e) = scan::rescan_dir(&mut sh.index.write(), &d, &sh.excludes) {
                 warn!(dir = %d.display(), "rescan failed: {e}");
             }
         }
@@ -223,7 +225,7 @@ fn writer(sh: Arc<Shared>, rx: Receiver<fsevents::Event>, overflow: fsevents::Ov
             // One directory per write-lock hold so searches keep flowing during big rescans.
             let mut stack = vec![s];
             while let Some(d) = stack.pop() {
-                match scan::rescan_dir(&mut sh.index.write(), &d) {
+                match scan::rescan_dir(&mut sh.index.write(), &d, &sh.excludes) {
                     Ok(sub) => stack.extend(sub),
                     Err(e) => warn!(dir = %d.display(), "rescan failed: {e}"),
                 }
@@ -411,6 +413,10 @@ fn main() {
     let sh = Arc::new(Shared {
         index: RwLock::new(index),
         root: root.clone(),
+        excludes: Excludes::load(&[], false).unwrap_or_else(|e| {
+            error!("bad exclude config, using the defaults: {e}");
+            Excludes::new(true, &[], Path::new("/")).expect("no globs")
+        }),
         snapshot: args.snapshot,
         volume_uuid: uuid,
         last_event_id: AtomicU64::new(since),

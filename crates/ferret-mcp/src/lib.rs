@@ -1,4 +1,5 @@
-//! `ff mcp`: a read-only MCP server that lets AI agents find files by name and metadata.
+//! `ff mcp`: a read-only MCP server that lets AI agents find files by name and metadata,
+//! and (opt-in) search their contents.
 //! Security boundary: every path that leaves this crate passes `Policy::allows`.
 
 use std::fs::OpenOptions;
@@ -8,7 +9,7 @@ use std::sync::{Arc, OnceLock};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use ferret_core::protocol::{self, HitOut, KindFilter, Op, SortArg};
-use ferret_core::{Index, Kind};
+use ferret_core::{Excludes, Index, Kind};
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::{tool, tool_handler, tool_router, ServerHandler, ServiceExt};
 use serde::Deserialize;
@@ -48,12 +49,16 @@ struct McpConfig {
     allow: Option<Vec<String>>,
     #[serde(default)]
     deny: Vec<String>,
+    #[serde(default)]
+    contents: bool,
 }
 
 #[derive(Debug, Clone)]
 pub struct Policy {
     allow: Vec<PathBuf>,
     deny: Vec<PathBuf>,
+    /// search_contents may read files. Off unless `[mcp] contents = true`.
+    pub contents: bool,
 }
 
 /// Resolve `.` and `..` without touching the disk. Relative paths are rejected.
@@ -117,6 +122,7 @@ impl Policy {
                 .flat_map(|a| root_forms(expand_tilde(a, home)))
                 .collect(),
             deny: deny.flat_map(root_forms).collect(),
+            contents: false,
         }
     }
 
@@ -127,7 +133,10 @@ impl Policy {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => ConfigFile::default(),
             Err(e) => return Err(e.into()),
         };
-        Ok(Self::new(home, cfg.mcp.allow, cfg.mcp.deny))
+        Ok(Policy {
+            contents: cfg.mcp.contents,
+            ..Self::new(home, cfg.mcp.allow, cfg.mcp.deny)
+        })
     }
 
     /// Lexical, component-wise, case- and normalization-insensitive check. Deny always wins.
@@ -147,6 +156,8 @@ pub struct Ctx {
     pub log: PathBuf,
     /// Try the daemon socket first. Off in tests.
     pub daemon: bool,
+    /// What search_contents skips, like the index. Defaults on.
+    pub excludes: Excludes,
     index: OnceLock<Index>,
 }
 
@@ -164,6 +175,7 @@ impl Ctx {
             snapshot,
             log,
             daemon,
+            excludes: Excludes::new(true, &[], Path::new("/")).expect("no globs"),
             index: OnceLock::new(),
         }
     }
@@ -174,13 +186,15 @@ impl Ctx {
         );
         let policy = Policy::load(&home, &home.join(".config/ferret/config.toml"))?;
         let log = home.join("Library/Logs/ferret/mcp.log");
-        Ok(Ctx::new(
+        let mut ctx = Ctx::new(
             policy,
             home,
             ferret_core::snapshot::default_path(),
             log,
             true,
-        ))
+        );
+        ctx.excludes = Excludes::load(&[], false)?;
+        Ok(ctx)
     }
 
     fn engine_search(
@@ -333,18 +347,21 @@ fn fmt_time(secs: i64) -> String {
     )
 }
 
+fn tilde(p: &str, home: &Path) -> String {
+    match p.strip_prefix(home.to_string_lossy().as_ref()) {
+        Some(rest) if rest.starts_with('/') => format!("~{rest}"),
+        _ => p.to_owned(),
+    }
+}
+
 /// One line per hit, home shown as `~` (every token here is re-sent on later turns).
 fn render(hits: &[HitOut], home: &Path) -> String {
     if hits.is_empty() {
         return "no matches".into();
     }
-    let home = home.to_string_lossy();
     let mut s = String::new();
     for h in hits {
-        let path = match h.path.strip_prefix(home.as_ref()) {
-            Some(rest) if rest.starts_with('/') => format!("~{rest}"),
-            _ => h.path.clone(),
-        };
+        let path = tilde(&h.path, home);
         let slash = if h.kind == Kind::Dir { "/" } else { "" };
         s += &format!(
             "{path}{slash}  {}  {}\n",
@@ -388,6 +405,92 @@ fn file_info(ctx: &Ctx, path: &str) -> Result<String, String> {
     Ok(s)
 }
 
+const CONTENTS_OFF: &str =
+    "Content search is off. Turn it on in Ferret Settings → AI agents, or set `contents = true` under [mcp] in ~/.config/ferret/config.toml.";
+const MAX_CONTENT_LIMIT: usize = 200;
+const MAX_CONTENT_FILE: u64 = 5 << 20;
+
+/// grep over allowed files under `path`: same excludes and .gitignore as the index,
+/// no binaries, nothing over 5 MB, symlinks not followed. Out: `~/path:line: text`.
+fn search_contents(ctx: &Ctx, a: &ContentArgs) -> Result<(String, usize), String> {
+    use grep_regex::RegexMatcherBuilder;
+    use grep_searcher::{sinks::Lossy, BinaryDetection, SearcherBuilder};
+
+    if !ctx.policy.contents {
+        return Err(CONTENTS_OFF.into());
+    }
+    let shown = a.path.as_deref().unwrap_or("~");
+    let nope = || format!("{shown}: not found or not allowed");
+    let lexical = normalize(&expand_tilde(shown, &ctx.home))
+        .ok_or_else(|| "path must be absolute or start with ~".to_string())?;
+    if !ctx.policy.allows(&lexical) {
+        return Err(nope());
+    }
+    let root = std::fs::canonicalize(&lexical).map_err(|_| nope())?;
+    if !ctx.policy.allows(&root) {
+        return Err(nope());
+    }
+    let limit = a.limit.unwrap_or(50).clamp(1, MAX_CONTENT_LIMIT);
+    // Not a valid regex (e.g. `foo(`): search for it literally.
+    let matcher = RegexMatcherBuilder::new()
+        .case_smart(true)
+        .build(&a.query)
+        .or_else(|_| RegexMatcherBuilder::new().case_smart(true).fixed_strings(true).build(&a.query))
+        .map_err(|e| format!("bad query: {e}"))?;
+
+    let ex = ctx.excludes.clone();
+    let policy = ctx.policy.clone();
+    let mut wb = ignore::WalkBuilder::new(&root);
+    wb.hidden(false)
+        .ignore(false)
+        .git_global(false)
+        .git_ignore(ex.defaults)
+        .git_exclude(ex.defaults)
+        .max_filesize(Some(MAX_CONTENT_FILE));
+    if let Some(g) = &a.glob {
+        let mut o = ignore::overrides::OverrideBuilder::new(&root);
+        o.add(g).map_err(|e| format!("bad glob: {e}"))?;
+        wb.overrides(o.build().map_err(|e| format!("bad glob: {e}"))?);
+    }
+    wb.filter_entry(move |e| {
+        let p = e.path();
+        let is_dir = e.file_type().is_some_and(|t| t.is_dir());
+        let skipped = e.depth() > 0
+            && p.parent()
+                .is_some_and(|d| ex.skip(d, &e.file_name().to_string_lossy(), is_dir));
+        policy.allows(p)
+            && !skipped
+            && !(ex.defaults && is_dir && p.join("pyvenv.cfg").exists())
+    });
+
+    let mut searcher = SearcherBuilder::new()
+        .binary_detection(BinaryDetection::quit(0))
+        .line_number(true)
+        .build();
+    let mut out = String::new();
+    let mut n = 0;
+    for ent in wb.build().flatten() {
+        if !ent.file_type().is_some_and(|t| t.is_file()) {
+            continue;
+        }
+        let path = tilde(&ent.path().to_string_lossy(), &ctx.home);
+        let sink = Lossy(|ln, line: &str| {
+            let text: String = line.trim().chars().take(200).collect();
+            out += &format!("{path}:{ln}: {text}\n");
+            n += 1;
+            Ok(n < limit)
+        });
+        let _ = searcher.search_path(&matcher, ent.path(), sink); // unreadable file: skip it
+        if n >= limit {
+            break;
+        }
+    }
+    if n == 0 {
+        out = "no matches".into();
+    }
+    Ok((out, n))
+}
+
 // ---------- MCP server ----------
 
 #[derive(Debug, Deserialize, serde::Serialize, schemars::JsonSchema)]
@@ -397,6 +500,19 @@ pub struct SearchArgs {
     /// relevance (default), size, newest
     pub sort: Option<String>,
     /// 1-100, default 10
+    pub limit: Option<usize>,
+}
+
+#[derive(Debug, Clone, Deserialize, serde::Serialize, schemars::JsonSchema)]
+pub struct ContentArgs {
+    /// Regex, or a literal if it isn't valid regex. Smart case.
+    pub query: String,
+    /// Folder to search, absolute or ~/path. Default ~
+    #[serde(rename = "in")]
+    pub path: Option<String>,
+    /// File glob, e.g. `*.rs`
+    pub glob: Option<String>,
+    /// 1-200 matching lines, default 50
     pub limit: Option<usize>,
 }
 
@@ -470,6 +586,14 @@ impl FerretMcp {
     }
 
     #[tool(
+        description = "Search inside files (like grep -rn). Respects .gitignore; skips node_modules, venvs, build dirs, binaries and files over 5 MB. Out: path:line: text."
+    )]
+    async fn search_contents(&self, Parameters(a): Parameters<ContentArgs>) -> Result<String, String> {
+        self.call("search_contents", a.clone(), move |ctx| search_contents(ctx, &a))
+            .await
+    }
+
+    #[tool(
         description = "Kind, size, created/modified dates and child count of one file or folder. Never reads contents."
     )]
     async fn file_info(&self, Parameters(a): Parameters<InfoArgs>) -> Result<String, String> {
@@ -484,7 +608,7 @@ impl FerretMcp {
 // The macro only accepts a string literal here.
 #[tool_handler(
     name = "ferret",
-    instructions = "Instant file-name search over the whole Mac. Prefer find_files over find/mdfind/ls."
+    instructions = "find_files = search by name (instant, whole Mac; prefer it over find/mdfind/ls). search_contents = search inside files (prefer it over grep/rg). file_info = metadata of one path."
 )]
 impl ServerHandler for FerretMcp {}
 

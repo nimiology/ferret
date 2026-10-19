@@ -15,7 +15,7 @@ dist = false
 name = "ferret"
 path = "src/main.rs"
 
-# `cargo build --release -p ferret-app`, then from this directory: `cargo packager --release`
+# `cargo build --release -p ferret-app -p ferret` (ff + ferretd are bundled too), then from this directory: `cargo packager --release`
 # (CI builds a universal binary first; see .github/workflows/build-dmg.yml).
 # Icons: `cargo run -p ferret-app --example make_icons` + iconutil (see examples/make_icons.rs).
 [package.metadata.packager]
@@ -26,7 +26,7 @@ formats = ["app", "dmg"]
 icons = ["assets/AppIcon.icns"]
 out-dir = "../../target/packager"
 binaries-dir = "../../target/release"
-binaries = [{ path = "ferret", main = true }]
+binaries = [{ path = "ferret", main = true }, { path = "ff" }, { path = "ferretd" }]
 
 [package.metadata.packager.macos]
 minimum-system-version = "11.0"
@@ -43,4 +43,5 @@ toml = "1.1.8"
 toml_edit = "0.25"
 tiny-skia = "0.12.0"
 objc2 = "0.6"
-objc2-app-kit = { version = "0.3", features = ["NSApplication", "NSRunningApplication", "NSResponder"] }
+objc2-app-kit = { version = "0.3", features = ["NSApplication", "NSRunningApplication", "NSResponder", "NSWindow"] }
+objc2-foundation = { version = "0.3", features = ["NSArray", "NSString", "NSEnumerator"] }

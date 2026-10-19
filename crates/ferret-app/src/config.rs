@@ -10,10 +10,12 @@ pub const DEFAULT_HOTKEY: &str = "Option+Space";
 #[derive(Clone, Debug, PartialEq)]
 pub struct AppConfig {
     pub hotkey: String,
-    /// Stored for the daemon; ferretd does not read it yet.
+    /// Globs ferretd and `ff index` skip, on top of the built-in excludes.
     pub excluded: Vec<String>,
     pub external_drives: bool,
     pub launch_at_login: bool,
+    /// `[mcp] contents`: let agents use search_contents.
+    pub mcp_contents: bool,
 }
 
 impl Default for AppConfig {
@@ -23,6 +25,7 @@ impl Default for AppConfig {
             excluded: Vec::new(),
             external_drives: false,
             launch_at_login: false,
+            mcp_contents: false,
         }
     }
 }
@@ -39,10 +42,16 @@ pub fn config_path() -> PathBuf {
 pub fn read_app(text: &str) -> AppConfig {
     let d = AppConfig::default();
     let table = text.parse::<toml::Table>().unwrap_or_default();
+    let mcp_contents = table
+        .get("mcp")
+        .and_then(|m| m.get("contents"))
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
     let Some(app) = table.get("app").and_then(|v| v.as_table()) else {
-        return d;
+        return AppConfig { mcp_contents, ..d };
     };
     AppConfig {
+        mcp_contents,
         hotkey: app
             .get("hotkey")
             .and_then(|v| v.as_str())
@@ -67,7 +76,7 @@ pub fn read_app(text: &str) -> AppConfig {
     }
 }
 
-/// Replace only the [app] keys; every other table, comment and layout is kept as written.
+/// Replace only the [app] keys and `[mcp] contents`; every other key, comment and layout is kept.
 pub fn write_app(text: &str, cfg: &AppConfig) -> Result<String, toml_edit::TomlError> {
     use toml_edit::{value, Array, DocumentMut, Item, Table};
     let mut doc = text.parse::<DocumentMut>()?;
@@ -79,6 +88,10 @@ pub fn write_app(text: &str, cfg: &AppConfig) -> Result<String, toml_edit::TomlE
     app["excluded"] = value(cfg.excluded.iter().map(String::as_str).collect::<Array>());
     app["external_drives"] = value(cfg.external_drives);
     app["launch_at_login"] = value(cfg.launch_at_login);
+    if !doc.contains_table("mcp") {
+        doc["mcp"] = Item::Table(Table::new());
+    }
+    doc["mcp"]["contents"] = value(cfg.mcp_contents);
     Ok(doc.to_string())
 }
 
@@ -220,6 +233,55 @@ pub fn set_launch_at_login(on: bool) -> io::Result<()> {
     std::fs::write(path, plist)
 }
 
+/// `ff` shipped next to this binary in Ferret.app/Contents/MacOS (also true for cargo builds).
+pub fn bundled_ff() -> Option<PathBuf> {
+    let p = std::env::current_exe().ok()?.canonicalize().ok()?.with_file_name("ff");
+    p.is_file().then_some(p)
+}
+
+/// Command line for `claude mcp add`; the absolute path works without `ff` on PATH.
+pub fn mcp_line() -> String {
+    let ff = bundled_ff().map_or("ff".into(), |p| p.to_string_lossy().into_owned());
+    let ff = if ff.contains(' ') { format!("'{ff}'") } else { ff };
+    format!("claude mcp add --scope user ferret -- {ff} mcp")
+}
+
+/// Symlink /usr/local/bin/ff to the bundled ff, asking for an admin password.
+pub fn install_cli() -> Result<String, String> {
+    let ff = bundled_ff().ok_or("ff is not inside this app")?;
+    let ff = ff.to_string_lossy();
+    if ff.contains(['\'', '"', '\\']) {
+        return Err(format!("Unsupported characters in {ff}"));
+    }
+    let script = format!(
+        "do shell script \"mkdir -p /usr/local/bin && ln -sf '{ff}' /usr/local/bin/ff\" with administrator privileges"
+    );
+    let out = std::process::Command::new("/usr/bin/osascript")
+        .args(["-e", &script])
+        .output()
+        .map_err(|e| e.to_string())?;
+    if out.status.success() {
+        Ok("Installed: run `ff` in any new terminal.".into())
+    } else {
+        Err(String::from_utf8_lossy(&out.stderr).trim().to_string())
+    }
+}
+
+/// `ff daemon install`: the launchd agent that keeps the index live.
+pub fn start_daemon() -> Result<String, String> {
+    let ff = bundled_ff().ok_or("ff is not inside this app")?;
+    let out = std::process::Command::new(ff)
+        .args(["daemon", "install"])
+        .output()
+        .map_err(|e| e.to_string())?;
+    let text = |b: &[u8]| String::from_utf8_lossy(b).trim().to_string();
+    if out.status.success() {
+        Ok(text(&out.stdout))
+    } else {
+        Err(text(&out.stderr))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -232,11 +294,14 @@ mod tests {
         let cfg = AppConfig {
             excluded: vec!["~/Library/Caches".into()],
             launch_at_login: true,
+            mcp_contents: true,
             ..Default::default()
         };
         let new = write_app(old, &cfg).unwrap();
         let t: toml::Table = new.parse().unwrap();
         assert_eq!(t["mcp"]["deny"][0].as_str(), Some("~/.ssh"));
+        assert_eq!(t["mcp"]["contents"].as_bool(), Some(true));
+        assert!(read_app("[mcp]\ncontents = true").mcp_contents);
         assert!(
             new.contains("# my notes") && new.contains("# keep keys out"),
             "{new}"

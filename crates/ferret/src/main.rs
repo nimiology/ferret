@@ -22,6 +22,12 @@ struct IndexArgs {
     root: PathBuf,
     #[arg(long)]
     stats: bool,
+    /// Skip paths matching this glob (repeatable), on top of `exclude` in config.toml.
+    #[arg(long, value_name = "GLOB")]
+    exclude: Vec<String>,
+    /// Also index node_modules, virtualenvs, .gitignore'd files and other default excludes.
+    #[arg(long)]
+    no_default_excludes: bool,
 }
 
 /// Manage the background ferretd launchd agent.
@@ -287,7 +293,9 @@ fn run_index(a: IndexArgs) -> Result<()> {
         last_event_id: unsafe { objc2_core_services::FSEventsGetCurrentEventId() },
         volume_uuid: String::new(),
     };
-    let (index, st) = ferret_core::scan::scan(&a.root)
+    let ex = ferret_core::Excludes::load(&a.exclude, a.no_default_excludes)
+        .context("could not read ~/.config/ferret/config.toml")?;
+    let (index, st) = ferret_core::scan::scan_with_progress(&a.root, &ex, |_, _| {})
         .with_context(|| format!("could not scan {}", a.root.display()))?;
     let path = snapshot::default_path();
     if let Some(dir) = path.parent() {
@@ -573,6 +581,10 @@ mod tests {
         assert!(
             matches!(dispatch(&argv("ff index --root /tmp")).unwrap(), Cmd::Index(a) if a.root.as_os_str() == "/tmp")
         );
+        assert!(matches!(
+            dispatch(&argv("ff index --exclude *.log --exclude target --no-default-excludes")).unwrap(),
+            Cmd::Index(a) if a.exclude == ["*.log", "target"] && a.no_default_excludes
+        ));
         assert!(
             matches!(dispatch(&argv("ff daemon status")).unwrap(), Cmd::Daemon(a) if a.action == "status")
         );

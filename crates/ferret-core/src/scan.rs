@@ -1,9 +1,10 @@
 use crate::index::NO_PARENT;
-use crate::{Index, Kind, Result};
+use crate::{Excludes, Index, Kind, Result};
+use ignore::gitignore::Gitignore;
 use std::collections::HashMap;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::{mpsc, Mutex};
+use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant, UNIX_EPOCH};
 use unicode_normalization::{is_nfc, UnicodeNormalization};
 
@@ -19,14 +20,73 @@ pub struct ScanStats {
 /// Paths never scanned when walking from `/`.
 pub const SKIP: &[&str] = &["/System/Volumes", "/dev", "/private/var/vm", "/Volumes"];
 
-/// Walk `root` without following symlinks and build an index.
-pub fn scan(root: &Path) -> Result<(Index, ScanStats)> {
-    scan_with_progress(root, |_, _| {})
+/// .gitignore matchers in effect, outermost first; None outside a git repo.
+type Gi = Option<Arc<Vec<Gitignore>>>;
+
+/// Gitignore state after entering `dir`.
+fn enter(gi: &Gi, dir: &Path, has_git: bool, has_gitignore: bool) -> Gi {
+    let mut gi = if has_git { Some(Arc::new(Vec::new())) } else { gi.clone() };
+    if has_gitignore {
+        if let Some(v) = &mut gi {
+            Arc::make_mut(v).push(Gitignore::new(dir.join(".gitignore")).0);
+        }
+    }
+    gi
 }
 
-/// `scan`, calling `progress(entries_so_far, current_path)` every 8192 entries.
+fn ignored(gi: &Gi, path: &Path, is_dir: bool) -> bool {
+    let Some(v) = gi else { return false };
+    for m in v.iter().rev() {
+        match m.matched(path, is_dir) {
+            ignore::Match::Ignore(_) => return true,
+            ignore::Match::Whitelist(_) => return false,
+            ignore::Match::None => {}
+        }
+    }
+    false
+}
+
+/// Gitignore state inherited by `dir` from its ancestors, for rescans that start mid-tree.
+fn gi_above(dir: &Path) -> Gi {
+    let anc: Vec<&Path> = dir.ancestors().skip(1).collect();
+    let top = anc.iter().position(|a| a.join(".git").exists())?;
+    anc[..=top].iter().rev().fold(None, |gi, a| {
+        enter(&gi, a, *a == anc[top], a.join(".gitignore").is_file())
+    })
+}
+
+/// Drop `dir`'s excluded entries from its listing `v`; returns the gitignore state for its subdirs.
+/// A virtualenv (has `pyvenv.cfg`) keeps its own node but loses every child.
+fn retain<T>(ex: &Excludes, dir: &Path, gi: &Gi, v: &mut Vec<T>, f: impl Fn(&T) -> (&str, bool)) -> Gi {
+    if !ex.is_active() {
+        return None;
+    }
+    let has = |n: &str| v.iter().any(|e| f(e).0 == n);
+    if ex.defaults && has("pyvenv.cfg") {
+        v.clear();
+        return None;
+    }
+    let gi = if ex.defaults {
+        enter(gi, dir, has(".git"), has(".gitignore"))
+    } else {
+        None
+    };
+    v.retain(|e| {
+        let (n, d) = f(e);
+        !ex.skip(dir, n, d) && !(gi.is_some() && ignored(&gi, &dir.join(n), d))
+    });
+    gi
+}
+
+/// Walk `root` without following symlinks and build an index.
+pub fn scan(root: &Path) -> Result<(Index, ScanStats)> {
+    scan_with_progress(root, &Excludes::none(), |_, _| {})
+}
+
+/// `scan` minus `ex`, calling `progress(entries_so_far, current_path)` every 8192 entries.
 pub fn scan_with_progress(
     root: &Path,
+    ex: &Excludes,
     mut progress: impl FnMut(u64, &Path),
 ) -> Result<(Index, ScanStats)> {
     let start = Instant::now();
@@ -43,8 +103,9 @@ pub fn scan_with_progress(
 
     // Workers list directories in parallel; this thread is the only one touching `index`,
     // so every child dir gets its node id before its own listing job is queued.
-    type Job = (u32, PathBuf);
-    type Done = (u32, PathBuf, io::Result<Vec<Entry>>);
+    // Each job carries the gitignore state its directory inherits.
+    type Job = (u32, PathBuf, Gi);
+    type Done = (u32, PathBuf, Gi, io::Result<Vec<Entry>>);
     let (job_tx, job_rx) = mpsc::channel::<Job>();
     let job_rx = Mutex::new(job_rx);
     let (done_tx, done_rx) = mpsc::channel::<Done>();
@@ -61,9 +122,9 @@ pub fn scan_with_progress(
                 let mut buf = vec![0u8; 256 * 1024];
                 loop {
                     let job = job_rx.lock().unwrap().recv();
-                    let Ok((id, path)) = job else { break };
+                    let Ok((id, path, gi)) = job else { break };
                     let res = list_dir(&path, &mut buf);
-                    if done_tx.send((id, path, res)).is_err() {
+                    if done_tx.send((id, path, gi, res)).is_err() {
                         break;
                     }
                 }
@@ -74,14 +135,14 @@ pub fn scan_with_progress(
         job_tx
             .as_ref()
             .unwrap()
-            .send((0, root.to_path_buf()))
+            .send((0, root.to_path_buf(), if ex.defaults { gi_above(root) } else { None }))
             .unwrap();
         while pending > 0 {
-            let Ok((parent, dir, res)) = done_rx.recv() else {
+            let Ok((parent, dir, gi, res)) = done_rx.recv() else {
                 break;
             };
             pending -= 1;
-            let entries = match res {
+            let mut entries = match res {
                 Ok(v) => v,
                 Err(e) => {
                     if e.kind() == io::ErrorKind::PermissionDenied {
@@ -90,11 +151,12 @@ pub fn scan_with_progress(
                     continue;
                 }
             };
+            let gi = retain(ex, &dir, &gi, &mut entries, |e| (&e.name, e.kind == Kind::Dir));
             for e in entries {
                 count(&mut stats, e.kind);
                 let id = index.push(parent, &e.name, e.kind, e.size, e.mtime);
                 if let Some(p) = e.dir_path {
-                    job_tx.as_ref().unwrap().send((id, p)).unwrap();
+                    job_tx.as_ref().unwrap().send((id, p, gi.clone())).unwrap();
                     pending += 1;
                 }
                 if id % 8192 == 0 {
@@ -319,8 +381,42 @@ fn nfc(raw: &std::ffi::OsStr) -> String {
     }
 }
 
-/// Push `path` under `parent`, and its whole subtree if it is a directory.
-fn add_tree(ix: &mut Index, parent: u32, path: &Path, name: &str, m: &std::fs::Metadata) {
+/// `read_dir` minus SKIP paths and entries that vanished meanwhile: (path, NFC name, lstat).
+fn list_std(rd: std::fs::ReadDir) -> Vec<(PathBuf, String, std::fs::Metadata)> {
+    rd.flatten()
+        .filter(|e| !SKIP.iter().any(|s| e.path() == Path::new(s)))
+        .filter_map(|e| Some((e.path(), nfc(&e.file_name()), e.metadata().ok()?)))
+        .collect()
+}
+
+/// None if `name` in `dir` is excluded, else the gitignore state it inherits.
+fn admit(ex: &Excludes, dir: &Path, name: &str, is_dir: bool) -> Option<Gi> {
+    if !ex.is_active() {
+        return Some(None);
+    }
+    if ex.skip(dir, name, is_dir) || (ex.defaults && dir.join("pyvenv.cfg").exists()) {
+        return None;
+    }
+    let gi = if ex.defaults {
+        let (git, gitignore) = (dir.join(".git").exists(), dir.join(".gitignore").is_file());
+        enter(&gi_above(dir), dir, git, gitignore)
+    } else {
+        None
+    };
+    (!ignored(&gi, &dir.join(name), is_dir)).then_some(gi)
+}
+
+/// Push `path` under `parent`, and its whole subtree (minus `ex`) if it is a directory.
+/// `gi` is the gitignore state `path` inherits.
+fn add_tree(
+    ix: &mut Index,
+    parent: u32,
+    path: &Path,
+    name: &str,
+    m: &std::fs::Metadata,
+    ex: &Excludes,
+    gi: &Gi,
+) {
     let (kind, size, mtime) = meta_of(m);
     let id = ix.push(parent, name, kind, size, mtime);
     if kind != Kind::Dir {
@@ -329,14 +425,10 @@ fn add_tree(ix: &mut Index, parent: u32, path: &Path, name: &str, m: &std::fs::M
     let Ok(rd) = std::fs::read_dir(path) else {
         return;
     };
-    for e in rd.flatten() {
-        let p = e.path();
-        if SKIP.iter().any(|s| p == Path::new(s)) {
-            continue;
-        }
-        if let Ok(m) = e.metadata() {
-            add_tree(ix, id, &p, &nfc(&e.file_name()), &m);
-        }
+    let mut list = list_std(rd);
+    let gi = retain(ex, path, gi, &mut list, |(_, n, m)| (n, m.is_dir()));
+    for (p, n, m) in list {
+        add_tree(ix, id, &p, &n, &m, ex, &gi);
     }
 }
 
@@ -344,7 +436,8 @@ fn add_tree(ix: &mut Index, parent: u32, path: &Path, name: &str, m: &std::fs::M
 /// missing -> tombstone (recursively), changed kind/size/mtime -> update.
 /// If `dir` is not indexed or no longer on disk, the nearest indexed ancestor is rescanned instead.
 /// Returns the paths of the live child directories of the directory actually rescanned.
-pub fn rescan_dir(ix: &mut Index, dir: &Path) -> Result<Vec<PathBuf>> {
+/// Children now matching `ex` are removed.
+pub fn rescan_dir(ix: &mut Index, dir: &Path, ex: &Excludes) -> Result<Vec<PathBuf>> {
     let mut dir = dir.to_path_buf();
     let id = loop {
         match ix.find(&dir) {
@@ -364,10 +457,13 @@ pub fn rescan_dir(ix: &mut Index, dir: &Path) -> Result<Vec<PathBuf>> {
                     io::ErrorKind::NotFound | io::ErrorKind::NotADirectory
                 ) =>
         {
-            return rescan_dir(ix, dir.parent().unwrap_or(&dir));
+            return rescan_dir(ix, dir.parent().unwrap_or(&dir), ex);
         }
         Err(e) => return Err(e.into()),
     };
+    let mut list = list_std(rd);
+    let gi = if ex.defaults { gi_above(&dir) } else { None };
+    let gi = retain(ex, &dir, &gi, &mut list, |(_, n, m)| (n, m.is_dir()));
     if let Ok(m) = std::fs::symlink_metadata(&dir) {
         ix.nodes[id as usize].mtime = meta_of(&m).2;
     }
@@ -376,13 +472,7 @@ pub fn rescan_dir(ix: &mut Index, dir: &Path) -> Result<Vec<PathBuf>> {
         .map(|c| (ix.name(c).to_owned(), c))
         .collect();
     let mut subdirs = Vec::new();
-    for e in rd.flatten() {
-        let p = e.path();
-        if SKIP.iter().any(|s| p == Path::new(s)) {
-            continue;
-        }
-        let Ok(m) = e.metadata() else { continue }; // vanished meanwhile
-        let name = nfc(&e.file_name());
+    for (p, name, m) in list {
         let (kind, size, mtime) = meta_of(&m);
         match old.remove(&name) {
             Some(c) if ix.nodes[c as usize].kind == kind => {
@@ -394,7 +484,7 @@ pub fn rescan_dir(ix: &mut Index, dir: &Path) -> Result<Vec<PathBuf>> {
                 if let Some(c) = prev {
                     ix.remove(c);
                 }
-                add_tree(ix, id, &p, &name, &m);
+                add_tree(ix, id, &p, &name, &m, ex, &gi);
             }
         }
         if kind == Kind::Dir {
@@ -410,9 +500,9 @@ pub fn rescan_dir(ix: &mut Index, dir: &Path) -> Result<Vec<PathBuf>> {
 /// Apply one changed path with a single lstat: add, update or remove just that entry
 /// (a new directory brings its subtree). Falls back to `rescan_dir` on the parent when
 /// the parent isn't indexed yet.
-pub fn apply_path(ix: &mut Index, path: &Path) -> Result<()> {
+pub fn apply_path(ix: &mut Index, path: &Path, ex: &Excludes) -> Result<()> {
     let (Some(parent), Some(raw)) = (path.parent(), path.file_name()) else {
-        return rescan_dir(ix, path).map(|_| ());
+        return rescan_dir(ix, path, ex).map(|_| ());
     };
     if SKIP.iter().any(|s| path == Path::new(s)) {
         return Ok(());
@@ -421,11 +511,24 @@ pub fn apply_path(ix: &mut Index, path: &Path) -> Result<()> {
         .find(parent)
         .filter(|&p| ix.nodes[p as usize].kind == Kind::Dir)
     else {
-        return rescan_dir(ix, parent).map(|_| ());
+        return rescan_dir(ix, parent, ex).map(|_| ());
     };
     let name = nfc(raw);
     let existing = ix.children(pid).find(|&c| ix.name(c) == name);
-    match (std::fs::symlink_metadata(path), existing) {
+    let meta = std::fs::symlink_metadata(path);
+    let gi = match &meta {
+        Ok(m) => match admit(ex, parent, &name, m.is_dir()) {
+            Some(gi) => gi,
+            None => {
+                if let Some(c) = existing {
+                    ix.remove(c);
+                }
+                return Ok(());
+            }
+        },
+        Err(_) => None,
+    };
+    match (meta, existing) {
         (Ok(m), Some(c)) if ix.nodes[c as usize].kind == meta_of(&m).0 => {
             let (_, size, mtime) = meta_of(&m);
             let n = &mut ix.nodes[c as usize];
@@ -436,7 +539,7 @@ pub fn apply_path(ix: &mut Index, path: &Path) -> Result<()> {
             if let Some(c) = prev {
                 ix.remove(c);
             }
-            add_tree(ix, pid, path, &name, &m);
+            add_tree(ix, pid, path, &name, &m, ex, &gi);
         }
         (Err(e), Some(c)) if e.kind() == io::ErrorKind::NotFound => ix.remove(c),
         (Err(e), _) if e.kind() == io::ErrorKind::NotFound => {}
@@ -446,10 +549,10 @@ pub fn apply_path(ix: &mut Index, path: &Path) -> Result<()> {
 }
 
 /// `rescan_dir` on `dir` and every directory below it.
-pub fn rescan_subtree(ix: &mut Index, dir: &Path) -> Result<()> {
+pub fn rescan_subtree(ix: &mut Index, dir: &Path, ex: &Excludes) -> Result<()> {
     let mut stack = vec![dir.to_path_buf()];
     while let Some(d) = stack.pop() {
-        match rescan_dir(ix, &d) {
+        match rescan_dir(ix, &d, ex) {
             Ok(sub) => stack.extend(sub),
             Err(e) if d == dir => return Err(e),
             Err(_) => {} // unreadable subdir: keep what we had
@@ -462,6 +565,8 @@ pub fn rescan_subtree(ix: &mut Index, dir: &Path) -> Result<()> {
 mod tests {
     use super::*;
     use std::fs;
+
+    static NONE: std::sync::LazyLock<Excludes> = std::sync::LazyLock::new(Excludes::none);
 
     #[test]
     fn scans_tree() {
@@ -579,7 +684,7 @@ mod tests {
         fs::remove_file(r.join("a/gone.txt")).unwrap();
         fs::write(r.join("a/keep.txt"), b"12345").unwrap();
         fs::remove_dir_all(r.join("a/b")).unwrap();
-        rescan_dir(&mut ix, &r.join("a")).unwrap();
+        rescan_dir(&mut ix, &r.join("a"), &NONE).unwrap();
 
         let want: Vec<String> = [
             "",
@@ -606,13 +711,13 @@ mod tests {
 
         // event for a path that no longer exists falls back to the nearest ancestor
         fs::remove_dir_all(r.join("a/nd")).unwrap();
-        rescan_dir(&mut ix, &r.join("a/nd/x")).unwrap();
+        rescan_dir(&mut ix, &r.join("a/nd/x"), &NONE).unwrap();
         assert!(ix.find(&r.join("a/nd")).is_none());
 
         // subtree rescan catches changes below the first level
         fs::write(r.join("a/nd2.txt"), b"").unwrap();
         fs::create_dir_all(r.join("z/y")).unwrap();
-        rescan_subtree(&mut ix, &r).unwrap();
+        rescan_subtree(&mut ix, &r, &NONE).unwrap();
         assert!(ix.find(&r.join("a/nd2.txt")).is_some() && ix.find(&r.join("z/y")).is_some());
     }
 
@@ -629,7 +734,7 @@ mod tests {
         for i in 0..5 {
             fs::remove_file(r.join(format!("f{i}"))).unwrap();
         }
-        rescan_dir(&mut ix, &r).unwrap();
+        rescan_dir(&mut ix, &r, &NONE).unwrap();
         assert_eq!(ix.deleted, 5);
         let before = live_paths(&ix);
         assert!(ix.maybe_compact());
@@ -641,7 +746,7 @@ mod tests {
         assert!(!ix.maybe_compact());
         // links still work for further mutation
         fs::write(r.join("d/more"), b"").unwrap();
-        rescan_dir(&mut ix, &r.join("d")).unwrap();
+        rescan_dir(&mut ix, &r.join("d"), &NONE).unwrap();
         assert!(ix.find(&r.join("d/more")).is_some());
     }
 
@@ -653,11 +758,11 @@ mod tests {
         let (mut ix, _) = scan(&r).unwrap();
         // create, with a decomposed name as FSEvents may report it
         fs::write(r.join("e\u{301}.md"), b"").unwrap();
-        apply_path(&mut ix, &r.join("e\u{301}.md")).unwrap();
+        apply_path(&mut ix, &r.join("e\u{301}.md"), &NONE).unwrap();
         assert!(ix.find(&r.join("\u{e9}.md")).is_some());
         // modify
         fs::write(r.join("a.txt"), b"12345").unwrap();
-        apply_path(&mut ix, &r.join("a.txt")).unwrap();
+        apply_path(&mut ix, &r.join("a.txt"), &NONE).unwrap();
         assert_eq!(
             ix.nodes[ix.find(&r.join("a.txt")).unwrap() as usize].size,
             5
@@ -665,17 +770,84 @@ mod tests {
         // new dir brings its subtree
         fs::create_dir_all(r.join("n/m")).unwrap();
         fs::write(r.join("n/m/deep"), b"").unwrap();
-        apply_path(&mut ix, &r.join("n")).unwrap();
+        apply_path(&mut ix, &r.join("n"), &NONE).unwrap();
         assert!(ix.find(&r.join("n/m/deep")).is_some());
         // delete dir removes subtree; deleting twice is fine
         fs::remove_dir_all(r.join("n")).unwrap();
-        apply_path(&mut ix, &r.join("n")).unwrap();
-        apply_path(&mut ix, &r.join("n")).unwrap();
+        apply_path(&mut ix, &r.join("n"), &NONE).unwrap();
+        apply_path(&mut ix, &r.join("n"), &NONE).unwrap();
         assert!(ix.find(&r.join("n/m/deep")).is_none());
         // parent not indexed yet -> falls back to rescanning the ancestor
         fs::create_dir_all(r.join("x/y")).unwrap();
         fs::write(r.join("x/y/z"), b"").unwrap();
-        apply_path(&mut ix, &r.join("x/y/z")).unwrap();
+        apply_path(&mut ix, &r.join("x/y/z"), &NONE).unwrap();
         assert!(ix.find(&r.join("x/y/z")).is_some());
+    }
+
+    /// Junk dirs, a venv with a custom name, gitignored output, user globs.
+    fn junk_tree(r: &Path) {
+        fs::create_dir_all(r.join("node_modules/pkg")).unwrap();
+        fs::create_dir_all(r.join("myenv/lib")).unwrap();
+        fs::write(r.join("myenv/pyvenv.cfg"), b"").unwrap();
+        fs::create_dir_all(r.join("repo/.git")).unwrap();
+        fs::create_dir_all(r.join("repo/out")).unwrap();
+        fs::create_dir_all(r.join("repo/src")).unwrap();
+        fs::write(r.join("repo/.gitignore"), b"out/\n*.tmp\n").unwrap();
+        fs::write(r.join("repo/out/a.js"), b"").unwrap();
+        fs::write(r.join("repo/src/x.tmp"), b"").unwrap();
+        fs::write(r.join("repo/src/main.rs"), b"").unwrap();
+        fs::write(r.join("notes.log"), b"").unwrap();
+        fs::write(r.join("keep.txt"), b"").unwrap();
+    }
+
+    fn junk_ex() -> Excludes {
+        Excludes::new(true, &["*.log".into()], Path::new("/")).unwrap()
+    }
+
+    fn junk_want(r: &Path) -> Vec<String> {
+        let mut v: Vec<String> = [
+            "", "/keep.txt", "/myenv", "/repo", "/repo/.gitignore", "/repo/src", "/repo/src/main.rs",
+        ]
+        .iter()
+        .map(|s| format!("{}{s}", r.display()))
+        .collect();
+        v.sort();
+        v
+    }
+
+    #[test]
+    fn scan_skips_excludes() {
+        let t = tempfile::tempdir().unwrap();
+        let r = t.path().canonicalize().unwrap();
+        junk_tree(&r);
+        let (ix, _) = scan_with_progress(&r, &junk_ex(), |_, _| {}).unwrap();
+        assert_eq!(live_paths(&ix), junk_want(&r));
+        // and nothing is skipped without excludes
+        let (ix, _) = scan(&r).unwrap();
+        assert!(ix.find(&r.join("node_modules/pkg")).is_some());
+    }
+
+    #[test]
+    fn rescans_keep_excludes_out() {
+        let t = tempfile::tempdir().unwrap();
+        let r = t.path().canonicalize().unwrap();
+        let (mut ix, _) = scan(&r).unwrap();
+        junk_tree(&r);
+        let ex = junk_ex();
+        rescan_subtree(&mut ix, &r, &ex).unwrap();
+        assert_eq!(live_paths(&ix), junk_want(&r));
+        // single-path events inside a repo, a venv and a junk dir
+        for p in ["repo/src/y.tmp", "repo/src/ok.rs", "myenv/lib/z.py", "node_modules/q.js"] {
+            fs::write(r.join(p), b"").unwrap();
+            apply_path(&mut ix, &r.join(p), &ex).unwrap();
+        }
+        let mut want = junk_want(&r);
+        want.push(format!("{}/repo/src/ok.rs", r.display()));
+        want.sort();
+        assert_eq!(live_paths(&ix), want);
+        // an existing index loses newly excluded entries on rescan
+        let (mut ix, _) = scan(&r).unwrap();
+        rescan_subtree(&mut ix, &r, &ex).unwrap();
+        assert_eq!(live_paths(&ix), want);
     }
 }

@@ -48,7 +48,7 @@ Spotlight skips hidden folders and half your dev tree. `find` takes a minute and
 |---|---|
 | **`ff`** | The command line: search, a live interactive picker (`ff -i`), and shell widgets (Ctrl-T, `fcd`) |
 | **`ferretd`** | A small background daemon that keeps the index in memory and up to date |
-| **`ff mcp`** | An MCP server so AI agents can find files by name and metadata |
+| **`ff mcp`** | An MCP server so AI agents can find files by name, and (if you allow it) search inside them |
 | **Ferret.app** | A menu bar app: press ⌥Space anywhere, type, hit Enter |
 
 ## Install
@@ -65,14 +65,22 @@ brew install nimiology/ferret/ferret
 xattr -dr com.apple.quarantine /Applications/Ferret.app
 ```
 
+The app comes with `ff` and `ferretd` inside it, so you don't need Homebrew too. Open **Settings…** from the menu bar icon, then:
+
+- **Install `ff` command** links `ff` into `/usr/local/bin` (macOS asks for your password), so `ff` works in any new terminal.
+- **Start background indexer** runs `ff daemon install`.
+- Under **AI agents**, copy the `claude mcp add` line. It uses the full path inside Ferret.app, so it works even without the `ff` command.
+
 <details>
 <summary>From source</summary>
 
 ```sh
 git clone https://github.com/nimiology/ferret && cd ferret
-cargo install --path crates/ferret        # ff + ferretd
+cargo install --path crates/ferret        # ff + ferretd, into ~/.cargo/bin (already on PATH with rustup)
 cargo install --path crates/ferret-app    # the menu bar app binary
 ```
+
+(`cargo install --path .` doesn't work at the repo root: it's a workspace, so point at the crate.)
 
 Release tarballs and a shell installer are also attached to every [GitHub release](https://github.com/nimiology/ferret/releases).
 </details>
@@ -98,7 +106,7 @@ Not sure everything is set up? `ff doctor` checks the index, the daemon and Full
 | `"exact phrase"` | names containing the phrase | `ff "final draft"` |
 | `!word` | leaves out names containing it | `ff report !old` |
 | `*.ext` / `ext:a;b` | those extensions | `ff ext:jpg;png` |
-| `type:file` / `type:dir` | only files or only folders | `ff node_modules type:dir` |
+| `type:file` / `type:dir` | only files or only folders | `ff Projects type:dir` |
 | `size:>N` / `size:<N` | by size, units KB MB GB | `ff size:>1GB` |
 | `mod:<7d` / `mod:>1y` | changed within / older than (s m h d w y) | `ff 'mod:<2d' ext:md` |
 | `in:folder` | only under that folder | `ff in:~/Projects Cargo.toml` |
@@ -106,6 +114,27 @@ Not sure everything is set up? `ff doctor` checks the index, the daemon and Full
 Flags: `--limit N`, `--sort score|size|mtime`, `--json` and `-0` for scripts. `ff big` and `ff recent` are shortcuts for the two questions everyone asks.
 
 **In the picker** (`ff -i`): ↑/↓ move · Enter prints the path · Tab cycles All / Files / Folders / Recent · Ctrl-O open · Ctrl-R reveal in Finder · Ctrl-Y copy · Ctrl-L Quick Look · Esc quit.
+
+### What gets indexed
+
+Everything except the noise. By default Ferret skips:
+
+- These folders, wherever they are: `node_modules` `.venv` `.venv2` `venv` `env` `__pycache__` `.pytest_cache` `.mypy_cache` `.ruff_cache` `dist` `build` `.next` `.nuxt` `.vite` `coverage` `htmlcov` `.gradle` `Pods` `.dart_tool` `.git` `.idea`
+- Any virtualenv, whatever its name (any folder that contains `pyvenv.cfg`).
+- Anything a `.gitignore` ignores inside a git repo.
+
+Add your own globs in `~/.config/ferret/config.toml`. A glob matches either a name or a full path:
+
+```toml
+exclude = ["*.log", "target", "~/Library/Caches"]
+default_excludes = false   # optional: index node_modules, venvs and .gitignore'd files too
+```
+
+The Excluded folders list in the app's Settings goes into the same file. For a one-off scan, pass `ff index --exclude '<glob>'` (you can repeat it) or `--no-default-excludes`. The daemon reads the config only when it starts, so after you change it, rebuild the index:
+
+```sh
+ff daemon uninstall && ff index && ff daemon install
+```
 
 ## The menu bar app
 
@@ -129,7 +158,13 @@ claude mcp add --scope user ferret -- ff mcp
 ```
 </details>
 
-Now "find the contract PDF I downloaded last week" just works. Ferret gives agents one tool, `find_files` (sorted by relevance, size or newest), plus `file_info`. Measured in Claude Code, 5 runs each with a warm cache:
+Now "find the contract PDF I downloaded last week" just works. Ferret gives agents these tools:
+
+- `find_files` searches by name, sorted by relevance, size or newest.
+- `search_contents` searches inside files, like `grep -rn`. It takes a literal or a regex, plus an optional `in:` folder, a file glob and a limit, and returns `path:line: text`. It follows the same excludes and `.gitignore` as the index, and skips binary files and anything over 5 MB. **It's off until you turn it on.**
+- `file_info` returns the metadata for one path.
+
+Measured in Claude Code, 5 runs each with a warm cache:
 
 | "Find the business plan PDF I saved recently" | Shell tools (`find`, `mdfind`) | Ferret |
 |---|---|---|
@@ -139,7 +174,7 @@ Now "find the contract PDF I downloaded last week" just works. Ferret gives agen
 
 ### Your privacy comes first
 
-- **Names and metadata only.** Ferret never reads or returns file contents.
+- **Names and metadata only, unless you say otherwise.** Ferret reads file contents only if you tick **Let agents search file contents** in Settings, or set `contents = true` under `[mcp]` in the config. Even then, the allow list, the deny list and the secret folders below still apply.
 - **You choose what agents can see.** By default, only your home folder. Narrow it in `~/.config/ferret/config.toml`:
 
   ```toml
