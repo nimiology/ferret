@@ -152,6 +152,29 @@ fn search_contents_matches_and_skips() {
     assert_eq!(grep(&ctx, "zzz-none", None, None).unwrap(), "no matches");
 }
 
+#[test]
+fn search_contents_limit_deny_and_user_excludes() {
+    let dir = tempfile::tempdir().unwrap();
+    let h = dir.path().canonicalize().unwrap();
+    for p in ["a/one.txt", "private/two.txt", "logs/three.txt"] {
+        let p = h.join(p);
+        fs::create_dir_all(p.parent().unwrap()).unwrap();
+        fs::write(p, "hit\nhit\nhit\n").unwrap();
+    }
+    let mut ctx = ctx_for(&h);
+    ctx.policy = Policy::new(&h, None, vec!["~/private".into()]);
+    ctx.policy.contents = true;
+    ctx.excludes = Excludes::new(true, &["logs".into()], &h).unwrap();
+
+    let out = grep(&ctx, "hit", None, None).unwrap();
+    assert!(out.lines().all(|l| l.starts_with("~/a/one.txt:")), "{out}");
+    assert_eq!(out.lines().count(), 3);
+    assert!(grep(&ctx, "hit", Some("~/private"), None).is_err());
+
+    let a = ContentArgs { query: "hit".into(), path: None, glob: None, limit: Some(2) };
+    assert_eq!(search_contents(&ctx, &a).unwrap().0.lines().filter(|l| l.contains(":")).count(), 2);
+}
+
 fn ctx_for(home: &Path) -> Ctx {
     let policy = Policy::new(home, None, vec![]);
     Ctx::new(

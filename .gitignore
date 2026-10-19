@@ -1,4 +1,5 @@
 /target
+.DS_Store
 # Unpublished drafts (launch posts etc.)
 /.private/
 graphify-out/
