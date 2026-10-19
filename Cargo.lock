@@ -1529,7 +1529,7 @@ dependencies = [
 
 [[package]]
 name = "ferret"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -1549,7 +1549,7 @@ dependencies = [
 
 [[package]]
 name = "ferret-app"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "eframe",
@@ -1567,7 +1567,7 @@ dependencies = [
 
 [[package]]
 name = "ferret-core"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "bincode",
  "criterion",
@@ -1586,7 +1586,7 @@ dependencies = [
 
 [[package]]
 name = "ferret-mcp"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "ferret-core",
