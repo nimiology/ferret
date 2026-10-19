@@ -25,7 +25,11 @@ type Gi = Option<Arc<Vec<Gitignore>>>;
 
 /// Gitignore state after entering `dir`.
 fn enter(gi: &Gi, dir: &Path, has_git: bool, has_gitignore: bool) -> Gi {
-    let mut gi = if has_git { Some(Arc::new(Vec::new())) } else { gi.clone() };
+    let mut gi = if has_git {
+        Some(Arc::new(Vec::new()))
+    } else {
+        gi.clone()
+    };
     if has_gitignore {
         if let Some(v) = &mut gi {
             Arc::make_mut(v).push(Gitignore::new(dir.join(".gitignore")).0);
@@ -57,7 +61,13 @@ fn gi_above(dir: &Path) -> Gi {
 
 /// Drop `dir`'s excluded entries from its listing `v`; returns the gitignore state for its subdirs.
 /// A virtualenv (has `pyvenv.cfg`) keeps its own node but loses every child.
-fn retain<T>(ex: &Excludes, dir: &Path, gi: &Gi, v: &mut Vec<T>, f: impl Fn(&T) -> (&str, bool)) -> Gi {
+fn retain<T>(
+    ex: &Excludes,
+    dir: &Path,
+    gi: &Gi,
+    v: &mut Vec<T>,
+    f: impl Fn(&T) -> (&str, bool),
+) -> Gi {
     if !ex.is_active() {
         return None;
     }
@@ -135,7 +145,11 @@ pub fn scan_with_progress(
         job_tx
             .as_ref()
             .unwrap()
-            .send((0, root.to_path_buf(), if ex.defaults { gi_above(root) } else { None }))
+            .send((
+                0,
+                root.to_path_buf(),
+                if ex.defaults { gi_above(root) } else { None },
+            ))
             .unwrap();
         while pending > 0 {
             let Ok((parent, dir, gi, res)) = done_rx.recv() else {
@@ -151,7 +165,9 @@ pub fn scan_with_progress(
                     continue;
                 }
             };
-            let gi = retain(ex, &dir, &gi, &mut entries, |e| (&e.name, e.kind == Kind::Dir));
+            let gi = retain(ex, &dir, &gi, &mut entries, |e| {
+                (&e.name, e.kind == Kind::Dir)
+            });
             for e in entries {
                 count(&mut stats, e.kind);
                 let id = index.push(parent, &e.name, e.kind, e.size, e.mtime);
@@ -806,7 +822,13 @@ mod tests {
 
     fn junk_want(r: &Path) -> Vec<String> {
         let mut v: Vec<String> = [
-            "", "/keep.txt", "/myenv", "/repo", "/repo/.gitignore", "/repo/src", "/repo/src/main.rs",
+            "",
+            "/keep.txt",
+            "/myenv",
+            "/repo",
+            "/repo/.gitignore",
+            "/repo/src",
+            "/repo/src/main.rs",
         ]
         .iter()
         .map(|s| format!("{}{s}", r.display()))
@@ -837,7 +859,12 @@ mod tests {
         rescan_subtree(&mut ix, &r, &ex).unwrap();
         assert_eq!(live_paths(&ix), junk_want(&r));
         // single-path events inside a repo, a venv and a junk dir
-        for p in ["repo/src/y.tmp", "repo/src/ok.rs", "myenv/lib/z.py", "node_modules/q.js"] {
+        for p in [
+            "repo/src/y.tmp",
+            "repo/src/ok.rs",
+            "myenv/lib/z.py",
+            "node_modules/q.js",
+        ] {
             fs::write(r.join(p), b"").unwrap();
             apply_path(&mut ix, &r.join(p), &ex).unwrap();
         }

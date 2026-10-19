@@ -129,7 +129,9 @@ fn search_contents_matches_and_skips() {
     w("proj/big.txt", &big);
 
     let mut ctx = ctx_for(&h);
-    assert!(grep(&ctx, "needle", None, None).unwrap_err().contains("Content search is off"));
+    assert!(grep(&ctx, "needle", None, None)
+        .unwrap_err()
+        .contains("Content search is off"));
     ctx.policy.contents = true;
 
     // smart case: lowercase matches both; only the two real files
@@ -138,15 +140,27 @@ fn search_contents_matches_and_skips() {
     lines.sort();
     assert_eq!(
         lines,
-        ["~/proj/notes.md:1: a NEEDLE here", "~/proj/src/main.rs:2: let needle = 1;"],
+        [
+            "~/proj/notes.md:1: a NEEDLE here",
+            "~/proj/src/main.rs:2: let needle = 1;"
+        ],
         "{out}"
     );
     // regex, glob, in:
-    assert_eq!(grep(&ctx, r"let \w+ =", None, None).unwrap().lines().count(), 1);
+    assert_eq!(
+        grep(&ctx, r"let \w+ =", None, None)
+            .unwrap()
+            .lines()
+            .count(),
+        1
+    );
     let out = grep(&ctx, "needle", Some("~/proj"), Some("*.md")).unwrap();
     assert_eq!(out.trim(), "~/proj/notes.md:1: a NEEDLE here");
     // invalid regex falls back to a literal
-    assert_eq!(grep(&ctx, "main(", None, None).unwrap(), "~/proj/src/main.rs:1: fn main() {\n");
+    assert_eq!(
+        grep(&ctx, "main(", None, None).unwrap(),
+        "~/proj/src/main.rs:1: fn main() {\n"
+    );
     // secrets: refused as a root and skipped inside the walk
     assert!(grep(&ctx, "needle", Some("~/.ssh"), None).is_err());
     assert_eq!(grep(&ctx, "zzz-none", None, None).unwrap(), "no matches");
@@ -171,8 +185,21 @@ fn search_contents_limit_deny_and_user_excludes() {
     assert_eq!(out.lines().count(), 3);
     assert!(grep(&ctx, "hit", Some("~/private"), None).is_err());
 
-    let a = ContentArgs { query: "hit".into(), path: None, glob: None, limit: Some(2) };
-    assert_eq!(search_contents(&ctx, &a).unwrap().0.lines().filter(|l| l.contains(":")).count(), 2);
+    let a = ContentArgs {
+        query: "hit".into(),
+        path: None,
+        glob: None,
+        limit: Some(2),
+    };
+    assert_eq!(
+        search_contents(&ctx, &a)
+            .unwrap()
+            .0
+            .lines()
+            .filter(|l| l.contains(":"))
+            .count(),
+        2
+    );
 }
 
 fn ctx_for(home: &Path) -> Ctx {

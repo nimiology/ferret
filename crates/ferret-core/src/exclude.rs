@@ -7,9 +7,27 @@ use std::path::{Path, PathBuf};
 
 /// Folder names skipped anywhere unless `default_excludes = false`.
 pub const DEFAULT_DIRS: &[&str] = &[
-    "node_modules", ".venv", ".venv2", "venv", "env", "__pycache__", ".pytest_cache",
-    ".mypy_cache", ".ruff_cache", "dist", "build", ".next", ".nuxt", ".vite", "coverage",
-    "htmlcov", ".gradle", "Pods", ".dart_tool", ".git", ".idea",
+    "node_modules",
+    ".venv",
+    ".venv2",
+    "venv",
+    "env",
+    "__pycache__",
+    ".pytest_cache",
+    ".mypy_cache",
+    ".ruff_cache",
+    "dist",
+    "build",
+    ".next",
+    ".nuxt",
+    ".vite",
+    "coverage",
+    "htmlcov",
+    ".gradle",
+    "Pods",
+    ".dart_tool",
+    ".git",
+    ".idea",
 ];
 
 #[derive(Debug, Clone, Default)]
@@ -73,7 +91,11 @@ impl Excludes {
         let mut pats = cfg.exclude;
         pats.extend(cfg.app.excluded);
         pats.extend_from_slice(extra);
-        Self::new(!no_defaults && cfg.default_excludes != Some(false), &pats, home)
+        Self::new(
+            !no_defaults && cfg.default_excludes != Some(false),
+            &pats,
+            home,
+        )
     }
 
     pub fn load(extra: &[String], no_defaults: bool) -> Result<Self> {

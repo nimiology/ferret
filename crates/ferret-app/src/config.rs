@@ -235,14 +235,22 @@ pub fn set_launch_at_login(on: bool) -> io::Result<()> {
 
 /// `ff` shipped next to this binary in Ferret.app/Contents/MacOS (also true for cargo builds).
 pub fn bundled_ff() -> Option<PathBuf> {
-    let p = std::env::current_exe().ok()?.canonicalize().ok()?.with_file_name("ff");
+    let p = std::env::current_exe()
+        .ok()?
+        .canonicalize()
+        .ok()?
+        .with_file_name("ff");
     p.is_file().then_some(p)
 }
 
 /// Command line for `claude mcp add`; the absolute path works without `ff` on PATH.
 pub fn mcp_line() -> String {
     let ff = bundled_ff().map_or("ff".into(), |p| p.to_string_lossy().into_owned());
-    let ff = if ff.contains(' ') { format!("'{ff}'") } else { ff };
+    let ff = if ff.contains(' ') {
+        format!("'{ff}'")
+    } else {
+        ff
+    };
     format!("claude mcp add --scope user ferret -- {ff} mcp")
 }
 

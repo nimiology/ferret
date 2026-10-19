@@ -1260,7 +1260,10 @@ impl App {
         });
         ui.add_space(6.0);
         if ui
-            .checkbox(&mut self.cfg.mcp_contents, "Let agents search file contents")
+            .checkbox(
+                &mut self.cfg.mcp_contents,
+                "Let agents search file contents",
+            )
             .changed()
         {
             changed = true;

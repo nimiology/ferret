@@ -435,7 +435,12 @@ fn search_contents(ctx: &Ctx, a: &ContentArgs) -> Result<(String, usize), String
     let matcher = RegexMatcherBuilder::new()
         .case_smart(true)
         .build(&a.query)
-        .or_else(|_| RegexMatcherBuilder::new().case_smart(true).fixed_strings(true).build(&a.query))
+        .or_else(|_| {
+            RegexMatcherBuilder::new()
+                .case_smart(true)
+                .fixed_strings(true)
+                .build(&a.query)
+        })
         .map_err(|e| format!("bad query: {e}"))?;
 
     let ex = ctx.excludes.clone();
@@ -458,9 +463,7 @@ fn search_contents(ctx: &Ctx, a: &ContentArgs) -> Result<(String, usize), String
         let skipped = e.depth() > 0
             && p.parent()
                 .is_some_and(|d| ex.skip(d, &e.file_name().to_string_lossy(), is_dir));
-        policy.allows(p)
-            && !skipped
-            && !(ex.defaults && is_dir && p.join("pyvenv.cfg").exists())
+        policy.allows(p) && !skipped && !(ex.defaults && is_dir && p.join("pyvenv.cfg").exists())
     });
 
     let mut searcher = SearcherBuilder::new()
@@ -588,9 +591,14 @@ impl FerretMcp {
     #[tool(
         description = "Search inside files (like grep -rn). Respects .gitignore; skips node_modules, venvs, build dirs, binaries and files over 5 MB. Out: path:line: text."
     )]
-    async fn search_contents(&self, Parameters(a): Parameters<ContentArgs>) -> Result<String, String> {
-        self.call("search_contents", a.clone(), move |ctx| search_contents(ctx, &a))
-            .await
+    async fn search_contents(
+        &self,
+        Parameters(a): Parameters<ContentArgs>,
+    ) -> Result<String, String> {
+        self.call("search_contents", a.clone(), move |ctx| {
+            search_contents(ctx, &a)
+        })
+        .await
     }
 
     #[tool(
