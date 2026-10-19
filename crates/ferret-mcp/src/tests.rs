@@ -101,6 +101,7 @@ fn grep(ctx: &Ctx, q: &str, path: Option<&str>, glob: Option<&str>) -> Result<St
         path: path.map(Into::into),
         glob: glob.map(Into::into),
         limit: None,
+        files_only: None,
     };
     search_contents(ctx, &a).map(|r| r.0)
 }
@@ -136,30 +137,24 @@ fn search_contents_matches_and_skips() {
 
     // smart case: lowercase matches both; only the two real files
     let out = grep(&ctx, "needle", None, None).unwrap();
-    let mut lines: Vec<_> = out.lines().collect();
-    lines.sort();
-    assert_eq!(
-        lines,
-        [
-            "~/proj/notes.md:1: a NEEDLE here",
-            "~/proj/src/main.rs:2: let needle = 1;"
-        ],
-        "{out}"
-    );
+    for want in [
+        "~/proj/notes.md\n  1: a NEEDLE here\n",
+        "~/proj/src/main.rs\n  2: let needle = 1;\n",
+    ] {
+        assert!(out.contains(want), "{out}");
+    }
+    assert_eq!(out.lines().count(), 4, "{out}");
     // regex, glob, in:
     assert_eq!(
-        grep(&ctx, r"let \w+ =", None, None)
-            .unwrap()
-            .lines()
-            .count(),
-        1
+        grep(&ctx, r"let \w+ =", None, None).unwrap(),
+        "~/proj/src/main.rs\n  2: let needle = 1;\n"
     );
     let out = grep(&ctx, "needle", Some("~/proj"), Some("*.md")).unwrap();
-    assert_eq!(out.trim(), "~/proj/notes.md:1: a NEEDLE here");
+    assert_eq!(out, "~/proj/notes.md\n  1: a NEEDLE here\n");
     // invalid regex falls back to a literal
     assert_eq!(
         grep(&ctx, "main(", None, None).unwrap(),
-        "~/proj/src/main.rs:1: fn main() {\n"
+        "~/proj/src/main.rs\n  1: fn main() {\n"
     );
     // secrets: refused as a root and skipped inside the walk
     assert!(grep(&ctx, "needle", Some("~/.ssh"), None).is_err());
@@ -181,24 +176,24 @@ fn search_contents_limit_deny_and_user_excludes() {
     ctx.excludes = Excludes::new(true, &["logs".into()], &h).unwrap();
 
     let out = grep(&ctx, "hit", None, None).unwrap();
-    assert!(out.lines().all(|l| l.starts_with("~/a/one.txt:")), "{out}");
-    assert_eq!(out.lines().count(), 3);
+    assert_eq!(out, "~/a/one.txt\n  1: hit\n  2: hit\n  3: hit\n");
     assert!(grep(&ctx, "hit", Some("~/private"), None).is_err());
 
-    let a = ContentArgs {
+    let mut a = ContentArgs {
         query: "hit".into(),
         path: None,
         glob: None,
         limit: Some(2),
+        files_only: None,
     };
     assert_eq!(
-        search_contents(&ctx, &a)
-            .unwrap()
-            .0
-            .lines()
-            .filter(|l| l.contains(":"))
-            .count(),
-        2
+        search_contents(&ctx, &a).unwrap(),
+        ("~/a/one.txt\n  1: hit\n  2: hit\n".into(), 2)
+    );
+    a.files_only = Some(true);
+    assert_eq!(
+        search_contents(&ctx, &a).unwrap(),
+        ("~/a/one.txt\n".into(), 1)
     );
 }
 

@@ -466,28 +466,57 @@ fn search_contents(ctx: &Ctx, a: &ContentArgs) -> Result<(String, usize), String
         policy.allows(p) && !skipped && !(ex.defaults && is_dir && p.join("pyvenv.cfg").exists())
     });
 
-    let mut searcher = SearcherBuilder::new()
-        .binary_detection(BinaryDetection::quit(0))
-        .line_number(true)
-        .build();
-    let mut out = String::new();
-    let mut n = 0;
-    for ent in wb.build().flatten() {
-        if !ent.file_type().is_some_and(|t| t.is_file()) {
-            continue;
-        }
-        let path = tilde(&ent.path().to_string_lossy(), &ctx.home);
-        let sink = Lossy(|ln, line: &str| {
-            let text: String = line.trim().chars().take(200).collect();
-            out += &format!("{path}:{ln}: {text}\n");
-            n += 1;
-            Ok(n < limit)
-        });
-        let _ = searcher.search_path(&matcher, ent.path(), sink); // unreadable file: skip it
-        if n >= limit {
-            break;
-        }
-    }
+    // Parallel walk like ripgrep: one searcher per thread, results appended per file.
+    let files_only = a.files_only.unwrap_or(false);
+    let shared = std::sync::Mutex::new((String::new(), 0usize));
+    wb.build_parallel().run(|| {
+        let mut searcher = SearcherBuilder::new()
+            .binary_detection(BinaryDetection::quit(0))
+            .line_number(true)
+            .build();
+        let (matcher, shared, home) = (&matcher, &shared, &ctx.home);
+        Box::new(move |ent| {
+            use ignore::WalkState::{Continue, Quit};
+            let Ok(ent) = ent else { return Continue };
+            if !ent.file_type().is_some_and(|t| t.is_file()) {
+                return Continue;
+            }
+            let mut lines = Vec::new();
+            let sink = Lossy(|ln, line: &str| {
+                lines.push(format!(
+                    "  {ln}: {}\n",
+                    line.trim().chars().take(200).collect::<String>()
+                ));
+                Ok(!files_only && lines.len() < limit)
+            });
+            let _ = searcher.search_path(matcher, ent.path(), sink); // unreadable file: skip it
+            if lines.is_empty() {
+                return Continue;
+            }
+            let mut g = shared.lock().unwrap();
+            let (out, n) = &mut *g;
+            if *n >= limit {
+                return Quit;
+            }
+            // Path once per file, then its lines: fewer tokens than grep's path:line form.
+            *out += &tilde(&ent.path().to_string_lossy(), home);
+            *out += "\n";
+            if files_only {
+                *n += 1;
+            } else {
+                for l in lines.iter().take(limit - *n) {
+                    *out += l;
+                    *n += 1;
+                }
+            }
+            if *n >= limit {
+                Quit
+            } else {
+                Continue
+            }
+        })
+    });
+    let (mut out, n) = shared.into_inner().unwrap();
     if n == 0 {
         out = "no matches".into();
     }
@@ -508,15 +537,17 @@ pub struct SearchArgs {
 
 #[derive(Debug, Clone, Deserialize, serde::Serialize, schemars::JsonSchema)]
 pub struct ContentArgs {
-    /// Regex, or a literal if it isn't valid regex. Smart case.
+    /// Regex, or a literal if it isn't valid regex. Lowercase = case-insensitive.
     pub query: String,
     /// Folder to search, absolute or ~/path. Default ~
     #[serde(rename = "in")]
     pub path: Option<String>,
     /// File glob, e.g. `*.rs`
     pub glob: Option<String>,
-    /// 1-200 matching lines, default 50
+    /// 1-200 matching lines (or files), default 50
     pub limit: Option<usize>,
+    /// true: only the paths of matching files (cheapest; use to see where something is)
+    pub files_only: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, serde::Serialize, schemars::JsonSchema)]
@@ -589,7 +620,7 @@ impl FerretMcp {
     }
 
     #[tool(
-        description = "Search inside files (like grep -rn). Respects .gitignore; skips node_modules, venvs, build dirs, binaries and files over 5 MB. Out: path:line: text."
+        description = "Search inside files (like grep -rn). Respects .gitignore; skips node_modules, venvs, build dirs, binaries and files over 5 MB. Smart case: an all-lowercase query already ignores case, no (?i) needed. Out: each path, then its `line: text` rows."
     )]
     async fn search_contents(
         &self,

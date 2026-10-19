@@ -161,7 +161,7 @@ claude mcp add --scope user ferret -- ff mcp
 Now "find the contract PDF I downloaded last week" just works. Ferret gives agents these tools:
 
 - `find_files` searches by name, sorted by relevance, size or newest.
-- `search_contents` searches inside files, like `grep -rn`. It takes a literal or a regex, plus an optional `in:` folder, a file glob and a limit, and returns `path:line: text`. It follows the same excludes and `.gitignore` as the index, and skips binary files and anything over 5 MB. **It's off until you turn it on.**
+- `search_contents` searches inside files, like `grep -rn`. It takes a literal or a regex, plus an optional `in:` folder, a file glob, a limit and `files_only`, and returns each matching path followed by its `line: text` rows. It follows the same excludes and `.gitignore` as the index, and skips binary files and anything over 5 MB. **It's off until you turn it on.**
 - `file_info` returns the metadata for one path.
 
 Measured in Claude Code, 5 runs each with a warm cache:
